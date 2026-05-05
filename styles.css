@@ -1,12 +1,20 @@
-/* Tabs */
+/* Header: tabs + refresh */
+.menu-hider-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	margin-bottom: 8px;
+}
+
 .menu-hider-tabs {
 	display: flex;
 	gap: 4px;
-	border-bottom: 1px solid var(--background-modifier-border);
+	flex: 1;
 }
 
 .menu-hider-tab {
-	padding: 8px 14px;
+	padding: 6px 12px;
 	border: none;
 	background: transparent;
 	cursor: pointer;
@@ -26,25 +34,20 @@
 	color: var(--text-on-accent);
 }
 
-/* Toolbar */
-.menu-hider-toolbar {
-	display: flex;
-	justify-content: flex-end;
-	padding: 8px 0;
-}
-
+/* Refresh button */
 .menu-hider-refresh-btn {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	width: 28px;
-	height: 28px;
+	width: 26px;
+	height: 26px;
 	padding: 0;
 	cursor: pointer;
 	border-radius: 4px;
 	border: 1px solid var(--background-modifier-border);
 	background: var(--background-secondary);
 	color: var(--text-muted);
+	flex-shrink: 0;
 	transition: background 0.15s, color 0.15s;
 }
 
@@ -54,8 +57,8 @@
 }
 
 .menu-hider-refresh-btn svg {
-	width: 16px;
-	height: 16px;
+	width: 14px;
+	height: 14px;
 }
 
 .menu-hider-refresh-btn.is-spinning svg {
@@ -67,20 +70,19 @@
 	to { transform: rotate(360deg); }
 }
 
-/* Menu list — mimic Obsidian's real context menu */
+/* Menu list */
 .menu-hider-menu-list {
 	background: var(--background-primary);
 	border-radius: 6px;
-	padding: 4px;
+	padding: 3px;
 	border: 1px solid var(--background-modifier-border);
-	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-	max-width: 420px;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 .menu-hider-empty {
 	color: var(--text-muted);
 	font-size: 13px;
-	padding: 24px 16px;
+	padding: 20px 16px;
 	text-align: center;
 	line-height: 1.6;
 }
@@ -89,7 +91,7 @@
 .menu-hider-row {
 	display: flex;
 	align-items: center;
-	padding: 4px 6px;
+	padding: 2px 4px;
 	border-radius: 4px;
 	cursor: default;
 }
@@ -98,7 +100,7 @@
 	background: var(--background-modifier-hover);
 }
 
-/* Hidden entry: grayed out */
+/* Hidden entry */
 .menu-hider-row.is-hidden-entry .menu-hider-item-icon,
 .menu-hider-row.is-hidden-entry .menu-hider-item-title {
 	color: var(--text-faint);
@@ -113,7 +115,7 @@
 .menu-hider-item-left {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: 6px;
 	flex: 1;
 	min-width: 0;
 }
@@ -139,31 +141,23 @@
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	line-height: 22px;
+	line-height: 20px;
 }
 
-/* Expand button */
-.menu-hider-expand-btn {
+/* Submenu chevron (always expanded) */
+.menu-hider-chevron {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	width: 20px;
-	height: 20px;
+	width: 16px;
+	height: 16px;
 	flex-shrink: 0;
-	cursor: pointer;
-	border-radius: 3px;
 	color: var(--text-faint);
-	margin-right: 2px;
 }
 
-.menu-hider-expand-btn:hover {
-	background: var(--background-modifier-hover);
-	color: var(--text-normal);
-}
-
-.menu-hider-expand-btn svg {
-	width: 14px;
-	height: 14px;
+.menu-hider-chevron svg {
+	width: 12px;
+	height: 12px;
 }
 
 /* Child items */
@@ -171,14 +165,9 @@
 	background: var(--background-secondary);
 }
 
-.menu-hider-children {
-	border-left: 2px solid var(--background-modifier-border);
-	margin-left: 20px;
-}
-
 /* Separator row */
 .menu-hider-separator-row {
-	padding: 3px 12px;
+	padding: 3px 4px;
 	min-height: 1px;
 }
 
@@ -192,7 +181,7 @@
 	background: var(--background-modifier-border);
 }
 
-/* Eye toggle — always visible */
+/* Eye toggle */
 .menu-hider-eye {
 	display: flex;
 	align-items: center;
@@ -219,4 +208,3 @@
 	width: 14px;
 	height: 14px;
 }
-

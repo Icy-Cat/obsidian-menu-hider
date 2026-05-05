@@ -188,6 +188,13 @@ export default class MenuHiderPlugin extends Plugin {
 		return undefined;
 	}
 
+	async triggerCollectAll(): Promise<void> {
+		const collectible: MenuType[] = ['file-menu-file', 'file-menu-folder', 'editor-menu'];
+		for (const menuType of collectible) {
+			await this.triggerCollect(menuType);
+		}
+	}
+
 	async triggerCollect(menuType: MenuType): Promise<boolean> {
 		let targetEl: Element | null = null;
 
@@ -201,10 +208,7 @@ export default class MenuHiderPlugin extends Plugin {
 						targetEl = containerEl.querySelector('.nav-folder-title');
 					}
 				}
-				if (!targetEl) {
-					new Notice(t('notice.open-explorer'));
-					return false;
-				}
+				if (!targetEl) return false;
 				break;
 			}
 			case 'file-menu-file': {
@@ -216,50 +220,18 @@ export default class MenuHiderPlugin extends Plugin {
 						targetEl = containerEl.querySelector('.nav-file-title');
 					}
 				}
-				if (!targetEl) {
-					new Notice(t('notice.open-explorer'));
-					return false;
-				}
+				if (!targetEl) return false;
 				break;
 			}
 			case 'editor-menu': {
 				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (!view) {
-					new Notice(t('notice.open-file'));
-					return false;
-				}
+				if (!view) return false;
 				targetEl = view.contentEl.querySelector('.cm-content') || view.contentEl;
 				break;
 			}
-			case 'files-menu': {
-				const leaves = this.app.workspace.getLeavesOfType('file-explorer');
-				const leaf = leaves[0];
-				if (leaf && leaf.view) {
-					const containerEl = (leaf.view as any).containerEl as HTMLElement | undefined;
-					if (containerEl) {
-						const allFiles = containerEl.querySelectorAll('.nav-file-title');
-						if (allFiles.length >= 2 && allFiles[0] && allFiles[1]) {
-							(allFiles[0] as HTMLElement).click();
-							(allFiles[1] as HTMLElement).dispatchEvent(new MouseEvent('click', {
-								bubbles: true, ctrlKey: true,
-							}));
-							targetEl = allFiles[1] ?? null;
-						} else if (allFiles.length === 1) {
-							(allFiles[0] as HTMLElement).click();
-							targetEl = allFiles[0] ?? null;
-						}
-					}
-				}
-				if (!targetEl) {
-					new Notice(t('notice.open-explorer'));
-					return false;
-				}
-				break;
-			}
-			case 'url-menu': {
-				new Notice(t('notice.right-click-url'));
+			case 'files-menu':
+			case 'url-menu':
 				return false;
-			}
 		}
 
 		if (!targetEl) return false;

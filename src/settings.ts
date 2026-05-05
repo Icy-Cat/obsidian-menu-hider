@@ -28,7 +28,6 @@ export const DEFAULT_SETTINGS: MenuHiderSettings = {
 export class MenuHiderSettingTab extends PluginSettingTab {
 	plugin: MenuHiderPlugin;
 	activeTab: MenuType = 'file-menu-file';
-	expandedItems: Set<string> = new Set();
 
 	constructor(app: App, plugin: MenuHiderPlugin) {
 		super(app, plugin);
@@ -40,8 +39,9 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		containerEl.addClass('menu-hider-settings');
 
-		const tabBar = containerEl.createDiv({ cls: 'menu-hider-tabs' });
+		const header = containerEl.createDiv({ cls: 'menu-hider-header' });
 
+		const tabBar = header.createDiv({ cls: 'menu-hider-tabs' });
 		for (const menuType of ALL_MENU_TYPES) {
 			const tab = tabBar.createEl('button', {
 				text: t(`tab.${menuType}`),
@@ -54,8 +54,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 			});
 		}
 
-		const toolbar = containerEl.createDiv({ cls: 'menu-hider-toolbar' });
-		const refreshBtn = toolbar.createEl('button', {
+		const refreshBtn = header.createEl('button', {
 			cls: 'menu-hider-refresh-btn',
 			attr: { 'aria-label': t('refresh') },
 		});
@@ -63,10 +62,10 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 		refreshBtn.addEventListener('click', async () => {
 			refreshBtn.disabled = true;
 			refreshBtn.addClass('is-spinning');
-			const ok = await this.plugin.triggerCollect(this.activeTab);
+			await this.plugin.triggerCollectAll();
 			refreshBtn.disabled = false;
 			refreshBtn.removeClass('is-spinning');
-			if (ok) this.display();
+			this.display();
 		});
 
 		const menuList = containerEl.createDiv({ cls: 'menu-hider-menu-list' });
@@ -111,36 +110,23 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 			} else {
 				const isHidden = hiddenItems.has(entry.title);
 				const hasChildren = entry.children && entry.children.length > 0;
-				const isExpanded = this.expandedItems.has(`${menuType}::${entry.title}`);
 				const row = containerEl.createDiv({
 					cls: `menu-hider-row menu-hider-item-row${isHidden ? ' is-hidden-entry' : ''}${depth > 0 ? ' menu-hider-child' : ''}`,
 				});
 				if (depth > 0) {
-					row.style.paddingLeft = `${12 + depth * 20}px`;
+					row.style.paddingLeft = `${6 + depth * 16}px`;
 				}
 
 				const left = row.createDiv({ cls: 'menu-hider-item-left' });
-
 				const iconEl = left.createDiv({ cls: 'menu-hider-item-icon' });
 				if (entry.icon) {
 					try { setIcon(iconEl, entry.icon); } catch { /* icon not found */ }
 				}
-
 				left.createSpan({ text: entry.title, cls: 'menu-hider-item-title' });
 
 				if (hasChildren) {
-					const expandBtn = row.createDiv({ cls: 'menu-hider-expand-btn' });
-					setIcon(expandBtn, isExpanded ? 'chevron-down' : 'chevron-right');
-					expandBtn.addEventListener('click', (e) => {
-						e.stopPropagation();
-						const key = `${menuType}::${entry.title}`;
-						if (this.expandedItems.has(key)) {
-							this.expandedItems.delete(key);
-						} else {
-							this.expandedItems.add(key);
-						}
-						this.display();
-					});
+					const chevron = row.createDiv({ cls: 'menu-hider-chevron' });
+					setIcon(chevron, 'chevron-down');
 				}
 
 				this.addEyeToggle(row, !isHidden, async (visible) => {
@@ -155,9 +141,8 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 					this.display();
 				});
 
-				if (hasChildren && isExpanded) {
-					const childContainer = containerEl.createDiv({ cls: 'menu-hider-children' });
-					this.renderEntries(childContainer, menuType, entry.children!, depth + 1);
+				if (hasChildren) {
+					this.renderEntries(containerEl, menuType, entry.children!, depth + 1);
 				}
 			}
 		}
