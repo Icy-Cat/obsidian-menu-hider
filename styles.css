@@ -100,6 +100,14 @@
 	background: var(--background-modifier-hover);
 }
 
+/* Runtime: collapse group border when separator is hidden */
+.menu-hider-no-border {
+	border-top: none !important;
+	margin-top: 0 !important;
+	padding-top: 0 !important;
+	box-shadow: none !important;
+}
+
 /* Hidden entry */
 .menu-hider-row.is-hidden-entry .menu-hider-item-icon,
 .menu-hider-row.is-hidden-entry .menu-hider-item-title {

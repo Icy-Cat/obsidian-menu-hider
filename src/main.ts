@@ -329,24 +329,48 @@ export default class MenuHiderPlugin extends Plugin {
 		const hiddenSeps = new Set(this.settings.hiddenSeparators[menuType]);
 		if (hiddenTitles.size === 0 && hiddenSeps.size === 0) return;
 
-		const items = menuEl.querySelectorAll('.menu-item');
-		for (const item of Array.from(items)) {
-			const title = item.querySelector('.menu-item-title')?.textContent?.trim();
-			if (title && hiddenTitles.has(title)) {
-				(item as HTMLElement).style.display = 'none';
-			}
-		}
-
 		const scrollEl = menuEl.querySelector('.menu-scroll') || menuEl;
 		let sepIndex = 0;
+		let hasContent = false;
+
 		for (const child of Array.from(scrollEl.children) as HTMLElement[]) {
 			if (child.classList.contains('menu-separator')) {
 				if (hiddenSeps.has(sepIndex)) {
 					child.style.display = 'none';
 				}
 				sepIndex++;
-			} else if (child.classList.contains('menu-group') && sepIndex > 0) {
-				sepIndex++;
+			} else if (child.classList.contains('menu-group')) {
+				if (hasContent) {
+					if (hiddenSeps.has(sepIndex)) {
+						child.classList.add('menu-hider-no-border');
+					}
+					sepIndex++;
+				}
+				hasContent = true;
+
+				for (const item of Array.from(child.children) as HTMLElement[]) {
+					if (item.classList.contains('menu-item')) {
+						const title = item.querySelector('.menu-item-title')?.textContent?.trim();
+						if (title && hiddenTitles.has(title)) {
+							item.style.display = 'none';
+						}
+					} else if (item.classList.contains('menu-separator')) {
+						if (hiddenSeps.has(sepIndex)) {
+							item.style.display = 'none';
+						}
+						sepIndex++;
+					}
+				}
+
+				const visibleItems = child.querySelectorAll('.menu-item:not([style*="display: none"])');
+				if (visibleItems.length === 0) {
+					child.style.display = 'none';
+				}
+			} else if (child.classList.contains('menu-item')) {
+				const title = child.querySelector('.menu-item-title')?.textContent?.trim();
+				if (title && hiddenTitles.has(title)) {
+					child.style.display = 'none';
+				}
 			}
 		}
 	}
