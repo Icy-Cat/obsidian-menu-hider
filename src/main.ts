@@ -1,99 +1,399 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
+import { Menu, Plugin, TFile, TFolder, TAbstractFile, Editor, MarkdownView, Notice } from 'obsidian';
+import { MenuHiderSettings, DEFAULT_SETTINGS, MenuHiderSettingTab } from './settings';
+import { initLocale, t } from './i18n';
 
-// Remember to rename these classes and interfaces!
+export type MenuType = 'file-menu-file' | 'file-menu-folder' | 'editor-menu' | 'files-menu' | 'url-menu';
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export const ALL_MENU_TYPES: MenuType[] = [
+	'file-menu-file',
+	'file-menu-folder',
+	'editor-menu',
+	'files-menu',
+	'url-menu',
+];
+
+export interface CollectedMenuItem {
+	type: 'item';
+	title: string;
+	icon?: string;
+	children?: CollectedEntry[];
+}
+
+export interface CollectedSeparator {
+	type: 'separator';
+}
+
+export type CollectedEntry = CollectedMenuItem | CollectedSeparator;
+
+function emptyEntries(): Record<MenuType, CollectedEntry[]> {
+	return {
+		'file-menu-file': [],
+		'file-menu-folder': [],
+		'editor-menu': [],
+		'files-menu': [],
+		'url-menu': [],
+	};
+}
+
+export default class MenuHiderPlugin extends Plugin {
+	settings: MenuHiderSettings;
+	collectedEntries: Record<MenuType, CollectedEntry[]> = emptyEntries();
+
+	private observer: MutationObserver | null = null;
+	private lastMenuType: MenuType | null = null;
+	private collectMode = false;
 
 	async onload() {
 		await this.loadSettings();
+		initLocale();
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
+		if (this.settings.savedEntries) {
+			this.collectedEntries = { ...emptyEntries(), ...this.settings.savedEntries };
+		}
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
+		this.registerEvent(
+			this.app.workspace.on('file-menu', (menu: Menu, file: TAbstractFile, source: string) => {
+				const menuType: MenuType = file instanceof TFolder ? 'file-menu-folder' : 'file-menu-file';
+				this.lastMenuType = menuType;
+				if (!this.collectMode) this.deferCollectFromDom(menu, menuType);
+			})
+		);
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				editor.replaceSelection('Sample editor command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+		this.registerEvent(
+			this.app.workspace.on('editor-menu', (menu: Menu, editor: Editor, view: MarkdownView) => {
+				this.lastMenuType = 'editor-menu';
+				if (!this.collectMode) this.deferCollectFromDom(menu, 'editor-menu');
+			})
+		);
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			}
-		});
+		this.registerEvent(
+			// @ts-ignore
+			this.app.workspace.on('files-menu', (menu: Menu, files: TAbstractFile[], source: string) => {
+				this.lastMenuType = 'files-menu';
+				if (!this.collectMode) this.deferCollectFromDom(menu, 'files-menu');
+			})
+		);
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+		this.registerEvent(
+			// @ts-ignore
+			this.app.workspace.on('url-menu', (menu: Menu, url: string) => {
+				this.lastMenuType = 'url-menu';
+				if (!this.collectMode) this.deferCollectFromDom(menu, 'url-menu');
+			})
+		);
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-
+		this.setupDomObserver();
+		this.addSettingTab(new MenuHiderSettingTab(this.app, this));
 	}
 
 	onunload() {
+		if (this.observer) {
+			this.observer.disconnect();
+			this.observer = null;
+		}
+	}
+
+	private deferCollectFromDom(menu: Menu, menuType: MenuType) {
+		setTimeout(() => {
+			const dom = (menu as any).dom as HTMLElement | undefined;
+			if (!dom) return;
+			const entries = this.readEntriesFromDom(dom);
+			if (entries.length > 0) {
+				this.collectedEntries[menuType] = entries;
+				this.persistEntries();
+			}
+		}, 0);
+	}
+
+	private addSeparator(entries: CollectedEntry[]) {
+		const last = entries[entries.length - 1];
+		if (entries.length > 0 && last && last.type !== 'separator') {
+			entries.push({ type: 'separator' });
+		}
+	}
+
+	private readEntriesFromDom(dom: HTMLElement): CollectedEntry[] {
+		const scrollEl = dom.querySelector('.menu-scroll') || dom;
+		const entries: CollectedEntry[] = [];
+
+		for (const child of Array.from(scrollEl.children) as HTMLElement[]) {
+			if (child.classList.contains('menu-separator')) {
+				this.addSeparator(entries);
+			} else if (child.classList.contains('menu-group')) {
+				this.addSeparator(entries);
+				for (const item of Array.from(child.children) as HTMLElement[]) {
+					if (item.classList.contains('menu-item')) {
+						this.collectSingleItem(item, entries);
+					} else if (item.classList.contains('menu-separator')) {
+						this.addSeparator(entries);
+					}
+				}
+			} else if (child.classList.contains('menu-item')) {
+				this.collectSingleItem(child, entries);
+			}
+		}
+
+		while (entries.length > 0 && entries[entries.length - 1]?.type === 'separator') {
+			entries.pop();
+		}
+		return entries;
+	}
+
+	private collectSingleItem(el: HTMLElement, entries: CollectedEntry[]) {
+		const title = el.querySelector('.menu-item-title')?.textContent?.trim();
+		if (!title) return;
+		const icon = this.detectIconFromDom(el);
+		const hasSubmenu = !!el.querySelector('.menu-item-title ~ .menu-item-icon');
+		entries.push({
+			type: 'item',
+			title,
+			icon: icon || undefined,
+			children: hasSubmenu ? [] : undefined,
+		});
+	}
+
+	private detectIconFromDom(itemEl: HTMLElement): string | undefined {
+		const iconContainer = itemEl.querySelector('.menu-item-icon');
+		if (!iconContainer) return undefined;
+		const svg = iconContainer.querySelector('svg');
+		if (!svg) return undefined;
+
+		const dataIcon = svg.getAttribute('data-icon');
+		if (dataIcon) return dataIcon;
+
+		for (const cls of Array.from(svg.classList)) {
+			if (cls.startsWith('lucide-')) return cls.substring(7);
+		}
+
+		const parent = svg.closest('[data-icon]');
+		if (parent) return parent.getAttribute('data-icon') || undefined;
+
+		return undefined;
+	}
+
+	async triggerCollect(menuType: MenuType): Promise<boolean> {
+		let targetEl: Element | null = null;
+
+		switch (menuType) {
+			case 'file-menu-folder': {
+				const leaves = this.app.workspace.getLeavesOfType('file-explorer');
+				const leaf = leaves[0];
+				if (leaf && leaf.view) {
+					const containerEl = (leaf.view as any).containerEl as HTMLElement | undefined;
+					if (containerEl) {
+						targetEl = containerEl.querySelector('.nav-folder-title');
+					}
+				}
+				if (!targetEl) {
+					new Notice(t('notice.open-explorer'));
+					return false;
+				}
+				break;
+			}
+			case 'file-menu-file': {
+				const leaves = this.app.workspace.getLeavesOfType('file-explorer');
+				const leaf = leaves[0];
+				if (leaf && leaf.view) {
+					const containerEl = (leaf.view as any).containerEl as HTMLElement | undefined;
+					if (containerEl) {
+						targetEl = containerEl.querySelector('.nav-file-title');
+					}
+				}
+				if (!targetEl) {
+					new Notice(t('notice.open-explorer'));
+					return false;
+				}
+				break;
+			}
+			case 'editor-menu': {
+				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (!view) {
+					new Notice(t('notice.open-file'));
+					return false;
+				}
+				targetEl = view.contentEl.querySelector('.cm-content') || view.contentEl;
+				break;
+			}
+			case 'files-menu': {
+				const leaves = this.app.workspace.getLeavesOfType('file-explorer');
+				const leaf = leaves[0];
+				if (leaf && leaf.view) {
+					const containerEl = (leaf.view as any).containerEl as HTMLElement | undefined;
+					if (containerEl) {
+						const allFiles = containerEl.querySelectorAll('.nav-file-title');
+						if (allFiles.length >= 2 && allFiles[0] && allFiles[1]) {
+							(allFiles[0] as HTMLElement).click();
+							(allFiles[1] as HTMLElement).dispatchEvent(new MouseEvent('click', {
+								bubbles: true, ctrlKey: true,
+							}));
+							targetEl = allFiles[1] ?? null;
+						} else if (allFiles.length === 1) {
+							(allFiles[0] as HTMLElement).click();
+							targetEl = allFiles[0] ?? null;
+						}
+					}
+				}
+				if (!targetEl) {
+					new Notice(t('notice.open-explorer'));
+					return false;
+				}
+				break;
+			}
+			case 'url-menu': {
+				new Notice(t('notice.right-click-url'));
+				return false;
+			}
+		}
+
+		if (!targetEl) return false;
+		this.collectMode = true;
+
+		const rect = targetEl.getBoundingClientRect();
+		targetEl.dispatchEvent(new MouseEvent('contextmenu', {
+			bubbles: true,
+			cancelable: true,
+			clientX: rect.left + Math.min(rect.width / 2, 20),
+			clientY: rect.top + Math.min(rect.height / 2, 10),
+		}));
+
+		await new Promise<void>(r => setTimeout(r, 200));
+
+		// Find the hidden menu DOM
+		const menuDom = this.findHiddenMenu();
+		if (menuDom) {
+			const entries = this.readEntriesFromDom(menuDom);
+
+			await this.collectSubmenus(menuDom, entries);
+
+			if (entries.length > 0) {
+				this.collectedEntries[menuType] = entries;
+				this.persistEntries();
+			}
+		}
+
+		document.querySelectorAll('.menu').forEach(m => m.remove());
+		await new Promise<void>(r => setTimeout(r, 50));
+		this.collectMode = false;
+
+		return this.collectedEntries[menuType].length > 0;
+	}
+
+	private findHiddenMenu(): HTMLElement | null {
+		const menus = document.querySelectorAll('.menu');
+		for (const m of Array.from(menus)) {
+			if (m instanceof HTMLElement) return m;
+		}
+		return null;
+	}
+
+	private async collectSubmenus(menuDom: HTMLElement, entries: CollectedEntry[]) {
+		const menuItems = menuDom.querySelectorAll('.menu-item');
+		for (const itemEl of Array.from(menuItems) as HTMLElement[]) {
+			const hasSubmenuIndicator = !!itemEl.querySelector('.menu-item-title ~ .menu-item-icon');
+			if (!hasSubmenuIndicator) continue;
+
+			const title = itemEl.querySelector('.menu-item-title')?.textContent?.trim();
+			if (!title) continue;
+
+			itemEl.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+			itemEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+
+			await new Promise<void>(r => setTimeout(r, 200));
+
+			const allMenus = document.querySelectorAll('.menu');
+			let submenuDom: HTMLElement | null = null;
+			for (const m of Array.from(allMenus)) {
+				if (m instanceof HTMLElement && m !== menuDom) {
+					submenuDom = m;
+					break;
+				}
+			}
+
+			if (submenuDom) {
+				submenuDom.style.cssText = 'visibility:hidden!important;pointer-events:none!important;position:fixed;left:-9999px;top:-9999px;';
+				const children = this.readEntriesFromDom(submenuDom);
+				const parentEntry = entries.find(e => e.type === 'item' && e.title === title);
+				if (parentEntry && parentEntry.type === 'item') {
+					parentEntry.children = children;
+				}
+				submenuDom.remove();
+			}
+
+			itemEl.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+			await new Promise<void>(r => setTimeout(r, 50));
+		}
+	}
+
+	private setupDomObserver() {
+		this.observer = new MutationObserver((mutations) => {
+			for (const mutation of mutations) {
+				for (const node of Array.from(mutation.addedNodes)) {
+					if (!(node instanceof HTMLElement) || !node.classList.contains('menu')) continue;
+
+					if (this.collectMode) {
+						node.style.cssText = 'visibility:hidden!important;pointer-events:none!important;position:fixed;left:-9999px;top:-9999px;';
+						return;
+					}
+
+					const menuType = this.lastMenuType;
+					if (menuType) {
+						this.hideMenuItems(node, menuType);
+						this.lastMenuType = null;
+					}
+				}
+			}
+		});
+		this.observer.observe(document.body, { childList: true, subtree: true });
+	}
+
+	private hideMenuItems(menuEl: HTMLElement, menuType: MenuType) {
+		const hiddenTitles = new Set(this.settings.hiddenItems[menuType]);
+		const hiddenSeps = new Set(this.settings.hiddenSeparators[menuType]);
+		if (hiddenTitles.size === 0 && hiddenSeps.size === 0) return;
+
+		const items = menuEl.querySelectorAll('.menu-item');
+		for (const item of Array.from(items)) {
+			const title = item.querySelector('.menu-item-title')?.textContent?.trim();
+			if (title && hiddenTitles.has(title)) {
+				(item as HTMLElement).style.display = 'none';
+			}
+		}
+
+		const scrollEl = menuEl.querySelector('.menu-scroll') || menuEl;
+		let sepIndex = 0;
+		for (const child of Array.from(scrollEl.children) as HTMLElement[]) {
+			if (child.classList.contains('menu-separator')) {
+				if (hiddenSeps.has(sepIndex)) {
+					child.style.display = 'none';
+				}
+				sepIndex++;
+			} else if (child.classList.contains('menu-group') && sepIndex > 0) {
+				sepIndex++;
+			}
+		}
+	}
+
+	private async persistEntries() {
+		this.settings.savedEntries = this.collectedEntries;
+		await this.saveSettings();
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MyPluginSettings>);
+		const data = await this.loadData() as Partial<MenuHiderSettings> | null;
+		const defaultHidden: Record<string, string[]> = {};
+		const defaultSeps: Record<string, number[]> = {};
+		for (const mt of ALL_MENU_TYPES) {
+			defaultHidden[mt] = [];
+			defaultSeps[mt] = [];
+		}
+		this.settings = {
+			hiddenItems: { ...defaultHidden, ...data?.hiddenItems } as Record<MenuType, string[]>,
+			hiddenSeparators: { ...defaultSeps, ...data?.hiddenSeparators } as Record<MenuType, number[]>,
+			savedEntries: data?.savedEntries || undefined,
+		};
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
 	}
 }
