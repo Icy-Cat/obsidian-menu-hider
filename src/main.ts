@@ -55,6 +55,7 @@ export default class MenuHiderPlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.workspace.on('file-menu', (menu: Menu, file: TAbstractFile, source: string) => {
+				if (this.lastMenuType === 'tab-menu') return;
 				const menuType: MenuType = file instanceof TFolder ? 'file-menu-folder' : 'file-menu-file';
 				this.lastMenuType = menuType;
 				if (!this.collectMode) this.deferCollectFromDom(menu, menuType);
