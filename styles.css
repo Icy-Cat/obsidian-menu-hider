@@ -1,8 +1,235 @@
-/*
+/* Tabs */
+.menu-hider-tabs {
+	display: flex;
+	gap: 4px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+.menu-hider-tab {
+	padding: 8px 14px;
+	border: none;
+	background: transparent;
+	cursor: pointer;
+	border-radius: 6px 6px 0 0;
+	color: var(--text-muted);
+	font-size: 13px;
+	transition: background 0.15s, color 0.15s;
+}
 
-If your plugin does not need CSS, delete this file.
+.menu-hider-tab:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
 
-*/
+.menu-hider-tab.is-active {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+/* Toolbar */
+.menu-hider-toolbar {
+	display: flex;
+	justify-content: flex-end;
+	padding: 8px 0;
+}
+
+.menu-hider-refresh-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	cursor: pointer;
+	border-radius: 4px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	transition: background 0.15s, color 0.15s;
+}
+
+.menu-hider-refresh-btn:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.menu-hider-refresh-btn svg {
+	width: 16px;
+	height: 16px;
+}
+
+.menu-hider-refresh-btn.is-spinning svg {
+	animation: menu-hider-spin 0.6s linear infinite;
+}
+
+@keyframes menu-hider-spin {
+	from { transform: rotate(0deg); }
+	to { transform: rotate(360deg); }
+}
+
+/* Menu list — mimic Obsidian's real context menu */
+.menu-hider-menu-list {
+	background: var(--background-primary);
+	border-radius: 6px;
+	padding: 4px;
+	border: 1px solid var(--background-modifier-border);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+	max-width: 420px;
+}
+
+.menu-hider-empty {
+	color: var(--text-muted);
+	font-size: 13px;
+	padding: 24px 16px;
+	text-align: center;
+	line-height: 1.6;
+}
+
+/* Row base */
+.menu-hider-row {
+	display: flex;
+	align-items: center;
+	padding: 4px 6px;
+	border-radius: 4px;
+	cursor: default;
+}
+
+.menu-hider-row:hover {
+	background: var(--background-modifier-hover);
+}
+
+/* Hidden entry: grayed out */
+.menu-hider-row.is-hidden-entry .menu-hider-item-icon,
+.menu-hider-row.is-hidden-entry .menu-hider-item-title {
+	color: var(--text-faint);
+}
+
+.menu-hider-row.is-hidden-entry .menu-hider-item-title {
+	text-decoration: line-through;
+	text-decoration-color: var(--text-faint);
+}
+
+/* Item row */
+.menu-hider-item-left {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 1;
+	min-width: 0;
+}
+
+.menu-hider-item-icon {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	flex-shrink: 0;
+	color: var(--text-muted);
+}
+
+.menu-hider-item-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
+.menu-hider-item-title {
+	font-size: 13px;
+	color: var(--text-normal);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	line-height: 22px;
+}
+
+/* Expand button */
+.menu-hider-expand-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	flex-shrink: 0;
+	cursor: pointer;
+	border-radius: 3px;
+	color: var(--text-faint);
+	margin-right: 2px;
+}
+
+.menu-hider-expand-btn:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.menu-hider-expand-btn svg {
+	width: 14px;
+	height: 14px;
+}
+
+/* Child items */
+.menu-hider-child {
+	background: var(--background-secondary);
+}
+
+.menu-hider-children {
+	border-left: 2px solid var(--background-modifier-border);
+	margin-left: 20px;
+}
+
+/* Separator row */
+.menu-hider-separator-row {
+	padding: 3px 12px;
+	min-height: 1px;
+}
+
+.menu-hider-separator-row:hover {
+	background: transparent;
+}
+
+.menu-hider-separator-line {
+	flex: 1;
+	height: 1px;
+	background: var(--background-modifier-border);
+}
+
+/* Eye toggle — always visible */
+.menu-hider-eye {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	flex-shrink: 0;
+	cursor: pointer;
+	border-radius: 4px;
+	color: var(--text-faint);
+	transition: color 0.15s, background 0.15s;
+}
+
+.menu-hider-eye:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.menu-hider-eye.is-off {
+	color: var(--text-faint);
+}
+
+.menu-hider-eye svg {
+	width: 14px;
+	height: 14px;
+}
+
+/* Separator eye: only visible on hover */
+.menu-hider-separator-row .menu-hider-eye {
+	opacity: 0;
+	transition: opacity 0.15s;
+}
+
+.menu-hider-separator-row:hover .menu-hider-eye {
+	opacity: 1;
+}
+
+.menu-hider-separator-row .menu-hider-eye.is-off {
+	opacity: 1;
+}
