@@ -42,6 +42,7 @@ export default class MenuHiderPlugin extends Plugin {
 	private observer: MutationObserver | null = null;
 	private lastMenuType: MenuType | null = null;
 	private collectMode = false;
+	private pendingMenu: Menu | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -55,14 +56,22 @@ export default class MenuHiderPlugin extends Plugin {
 			this.app.workspace.on('file-menu', (menu: Menu, file: TAbstractFile, source: string) => {
 				const menuType: MenuType = file instanceof TFolder ? 'file-menu-folder' : 'file-menu-file';
 				this.lastMenuType = menuType;
-				if (!this.collectMode) this.deferCollectFromDom(menu, menuType);
+				if (this.collectMode) {
+					this.pendingMenu = menu;
+				} else {
+					this.deferCollectFromDom(menu, menuType);
+				}
 			})
 		);
 
 		this.registerEvent(
 			this.app.workspace.on('editor-menu', (menu: Menu, editor: Editor, view: MarkdownView) => {
 				this.lastMenuType = 'editor-menu';
-				if (!this.collectMode) this.deferCollectFromDom(menu, 'editor-menu');
+				if (this.collectMode) {
+					this.pendingMenu = menu;
+				} else {
+					this.deferCollectFromDom(menu, 'editor-menu');
+				}
 			})
 		);
 
@@ -70,7 +79,11 @@ export default class MenuHiderPlugin extends Plugin {
 			// @ts-ignore
 			this.app.workspace.on('files-menu', (menu: Menu, files: TAbstractFile[], source: string) => {
 				this.lastMenuType = 'files-menu';
-				if (!this.collectMode) this.deferCollectFromDom(menu, 'files-menu');
+				if (this.collectMode) {
+					this.pendingMenu = menu;
+				} else {
+					this.deferCollectFromDom(menu, 'files-menu');
+				}
 			})
 		);
 
@@ -78,7 +91,11 @@ export default class MenuHiderPlugin extends Plugin {
 			// @ts-ignore
 			this.app.workspace.on('url-menu', (menu: Menu, url: string) => {
 				this.lastMenuType = 'url-menu';
-				if (!this.collectMode) this.deferCollectFromDom(menu, 'url-menu');
+				if (this.collectMode) {
+					this.pendingMenu = menu;
+				} else {
+					this.deferCollectFromDom(menu, 'url-menu');
+				}
 			})
 		);
 
@@ -247,6 +264,7 @@ export default class MenuHiderPlugin extends Plugin {
 
 		if (!targetEl) return false;
 		this.collectMode = true;
+		this.pendingMenu = null;
 
 		const rect = targetEl.getBoundingClientRect();
 		targetEl.dispatchEvent(new MouseEvent('contextmenu', {
@@ -258,12 +276,15 @@ export default class MenuHiderPlugin extends Plugin {
 
 		await new Promise<void>(r => setTimeout(r, 200));
 
-		// Find the hidden menu DOM
-		const menuDom = this.findHiddenMenu();
+		// Find the hidden menu DOM for main item order + separators
+		const menuDom = document.querySelector('.menu') as HTMLElement | null;
 		if (menuDom) {
 			const entries = this.readEntriesFromDom(menuDom);
 
-			await this.collectSubmenus(menuDom, entries);
+			// Read submenus from the captured Menu object's internal items
+			if (this.pendingMenu) {
+				this.attachSubmenus(entries, this.pendingMenu);
+			}
 
 			if (entries.length > 0) {
 				this.collectedEntries[menuType] = entries;
@@ -274,54 +295,50 @@ export default class MenuHiderPlugin extends Plugin {
 		document.querySelectorAll('.menu').forEach(m => m.remove());
 		await new Promise<void>(r => setTimeout(r, 50));
 		this.collectMode = false;
+		this.pendingMenu = null;
 
 		return this.collectedEntries[menuType].length > 0;
 	}
 
-	private findHiddenMenu(): HTMLElement | null {
-		const menus = document.querySelectorAll('.menu');
-		for (const m of Array.from(menus)) {
-			if (m instanceof HTMLElement) return m;
-		}
-		return null;
-	}
+	private attachSubmenus(entries: CollectedEntry[], menu: Menu) {
+		const internalItems = (menu as any).items as any[] | undefined;
+		if (!internalItems) return;
 
-	private async collectSubmenus(menuDom: HTMLElement, entries: CollectedEntry[]) {
-		const menuItems = menuDom.querySelectorAll('.menu-item');
-		for (const itemEl of Array.from(menuItems) as HTMLElement[]) {
-			const hasSubmenuIndicator = !!itemEl.querySelector('.menu-item-title ~ .menu-item-icon');
-			if (!hasSubmenuIndicator) continue;
+		for (const item of internalItems) {
+			const submenu = item.submenu as Menu | null | undefined;
+			if (!submenu) continue;
 
-			const title = itemEl.querySelector('.menu-item-title')?.textContent?.trim();
+			const title = this.getItemTitle(item);
 			if (!title) continue;
 
-			itemEl.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-			itemEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+			const parentEntry = entries.find(e => e.type === 'item' && e.title === title);
+			if (!parentEntry || parentEntry.type !== 'item') continue;
 
-			await new Promise<void>(r => setTimeout(r, 200));
+			const submenuItems = (submenu as any).items as any[] | undefined;
+			if (!submenuItems || submenuItems.length === 0) continue;
 
-			const allMenus = document.querySelectorAll('.menu');
-			let submenuDom: HTMLElement | null = null;
-			for (const m of Array.from(allMenus)) {
-				if (m instanceof HTMLElement && m !== menuDom) {
-					submenuDom = m;
-					break;
+			const children: CollectedEntry[] = [];
+			for (const si of submenuItems) {
+				const siTitle = this.getItemTitle(si);
+				if (siTitle) {
+					children.push({
+						type: 'item',
+						title: siTitle,
+						icon: si.icon || undefined,
+					});
 				}
 			}
-
-			if (submenuDom) {
-				submenuDom.style.cssText = 'visibility:hidden!important;pointer-events:none!important;position:fixed;left:-9999px;top:-9999px;';
-				const children = this.readEntriesFromDom(submenuDom);
-				const parentEntry = entries.find(e => e.type === 'item' && e.title === title);
-				if (parentEntry && parentEntry.type === 'item') {
-					parentEntry.children = children;
-				}
-				submenuDom.remove();
+			if (children.length > 0) {
+				parentEntry.children = children;
 			}
-
-			itemEl.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-			await new Promise<void>(r => setTimeout(r, 50));
 		}
+	}
+
+	private getItemTitle(item: any): string | undefined {
+		if (item.title) return item.title;
+		if (item.titleEl) return item.titleEl.textContent?.trim();
+		if (item.dom) return item.dom.querySelector('.menu-item-title')?.textContent?.trim();
+		return undefined;
 	}
 
 	private setupDomObserver() {

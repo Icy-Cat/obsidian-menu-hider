@@ -220,16 +220,3 @@
 	height: 14px;
 }
 
-/* Separator eye: only visible on hover */
-.menu-hider-separator-row .menu-hider-eye {
-	opacity: 0;
-	transition: opacity 0.15s;
-}
-
-.menu-hider-separator-row:hover .menu-hider-eye {
-	opacity: 1;
-}
-
-.menu-hider-separator-row .menu-hider-eye.is-off {
-	opacity: 1;
-}
