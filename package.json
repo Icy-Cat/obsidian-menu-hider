@@ -1,7 +1,7 @@
 {
-	"name": "obsidian-sample-plugin",
+	"name": "obsidian-menu-hider",
 	"version": "1.0.0",
-	"description": "This is a sample plugin for Obsidian (https://obsidian.md)",
+	"description": "Inspect and hide context menu items by menu type",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {
