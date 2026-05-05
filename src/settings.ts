@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, setIcon } from 'obsidian';
+import { App, Notice, PluginSettingTab, setIcon } from 'obsidian';
 import MenuHiderPlugin, { MenuType, CollectedEntry, ALL_MENU_TYPES } from './main';
 import { t } from './i18n';
 
@@ -64,10 +64,14 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 		refreshBtn.addEventListener('click', async () => {
 			refreshBtn.disabled = true;
 			refreshBtn.addClass('is-spinning');
-			await this.plugin.triggerCollectAll();
+			const ok = await this.plugin.triggerCollect(this.activeTab);
 			refreshBtn.disabled = false;
 			refreshBtn.removeClass('is-spinning');
-			this.display();
+			if (ok) {
+				this.display();
+			} else {
+				new Notice(t('notice.passive-hint'));
+			}
 		});
 
 		const menuList = containerEl.createDiv({ cls: 'menu-hider-menu-list' });
