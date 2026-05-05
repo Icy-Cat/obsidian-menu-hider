@@ -44,7 +44,6 @@ export default class MenuHiderPlugin extends Plugin {
 	private observer: MutationObserver | null = null;
 	private lastMenuType: MenuType | null = null;
 	private collectMode = false;
-	private pendingMenu: Menu | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -58,22 +57,14 @@ export default class MenuHiderPlugin extends Plugin {
 			this.app.workspace.on('file-menu', (menu: Menu, file: TAbstractFile, source: string) => {
 				const menuType: MenuType = file instanceof TFolder ? 'file-menu-folder' : 'file-menu-file';
 				this.lastMenuType = menuType;
-				if (this.collectMode) {
-					this.pendingMenu = menu;
-				} else {
-					this.deferCollectFromDom(menu, menuType);
-				}
+				if (!this.collectMode) this.deferCollectFromDom(menu, menuType);
 			})
 		);
 
 		this.registerEvent(
 			this.app.workspace.on('editor-menu', (menu: Menu, editor: Editor, view: MarkdownView) => {
 				this.lastMenuType = 'editor-menu';
-				if (this.collectMode) {
-					this.pendingMenu = menu;
-				} else {
-					this.deferCollectFromDom(menu, 'editor-menu');
-				}
+				if (!this.collectMode) this.deferCollectFromDom(menu, 'editor-menu');
 			})
 		);
 
@@ -81,11 +72,7 @@ export default class MenuHiderPlugin extends Plugin {
 			// @ts-ignore
 			this.app.workspace.on('files-menu', (menu: Menu, files: TAbstractFile[], source: string) => {
 				this.lastMenuType = 'files-menu';
-				if (this.collectMode) {
-					this.pendingMenu = menu;
-				} else {
-					this.deferCollectFromDom(menu, 'files-menu');
-				}
+				if (!this.collectMode) this.deferCollectFromDom(menu, 'files-menu');
 			})
 		);
 
@@ -93,15 +80,10 @@ export default class MenuHiderPlugin extends Plugin {
 			// @ts-ignore
 			this.app.workspace.on('url-menu', (menu: Menu, url: string) => {
 				this.lastMenuType = 'url-menu';
-				if (this.collectMode) {
-					this.pendingMenu = menu;
-				} else {
-					this.deferCollectFromDom(menu, 'url-menu');
-				}
+				if (!this.collectMode) this.deferCollectFromDom(menu, 'url-menu');
 			})
 		);
 
-		// Tab header context menu — no workspace event, detect via DOM
 		this.registerDomEvent(document, 'contextmenu', (evt: MouseEvent) => {
 			const target = evt.target as HTMLElement;
 			if (target?.closest('.workspace-tab-header')) {
@@ -120,12 +102,11 @@ export default class MenuHiderPlugin extends Plugin {
 		}
 	}
 
-	private deferCollectFromDom(menu: Menu, menuType: MenuType) {
+	private deferCollectFromDom(_menu: Menu, menuType: MenuType) {
 		setTimeout(() => {
-			const dom = (menu as any).dom as HTMLElement | undefined;
+			const dom = (_menu as any).dom as HTMLElement | undefined;
 			if (!dom) return;
 			const entries = this.readEntriesFromDom(dom);
-			this.attachSubmenusFromMenu(entries, menu);
 			if (entries.length > 0) {
 				this.collectedEntries[menuType] = entries;
 				this.persistEntries();
@@ -199,29 +180,12 @@ export default class MenuHiderPlugin extends Plugin {
 		return undefined;
 	}
 
-	private getItemIcon(item: any): string | undefined {
-		if (typeof item.icon === 'string' && item.icon) return item.icon;
-		if (item.iconEl) {
-			const svg = item.iconEl.querySelector('svg');
-			if (svg) {
-				const dataIcon = svg.getAttribute('data-icon');
-				if (dataIcon) return dataIcon;
-				for (const cls of Array.from(svg.classList) as string[]) {
-					if (cls.startsWith('lucide-')) return cls.substring(7);
-				}
-			}
-		}
-		if (item.dom) {
-			return this.detectIconFromDom(item.dom);
-		}
-		return undefined;
-	}
-
 	async triggerCollectAll(): Promise<void> {
-		const collectible: MenuType[] = ['file-menu-file', 'file-menu-folder', 'editor-menu', 'tab-menu'];
+		const collectible: MenuType[] = ['file-menu-file', 'file-menu-folder', 'editor-menu'];
 		for (const menuType of collectible) {
 			await this.triggerCollect(menuType);
 		}
+		new Notice(t('notice.passive-hint'));
 	}
 
 	async triggerCollect(menuType: MenuType): Promise<boolean> {
@@ -258,31 +222,14 @@ export default class MenuHiderPlugin extends Plugin {
 				targetEl = view.contentEl.querySelector('.cm-content') || view.contentEl;
 				break;
 			}
-			case 'tab-menu': {
-				targetEl = document.querySelector('.workspace-tab-header.is-active');
-				if (!targetEl) targetEl = document.querySelector('.workspace-tab-header');
-				if (!targetEl) return false;
-				break;
-			}
-			case 'url-menu': {
-				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (!view) return false;
-				targetEl = view.contentEl.querySelector('a.external-link')
-					|| view.contentEl.querySelector('.cm-url')
-					|| view.contentEl.querySelector('a[href]');
-				if (!targetEl) {
-					new Notice(t('notice.right-click-url'));
-					return false;
-				}
-				break;
-			}
+			case 'tab-menu':
 			case 'files-menu':
+			case 'url-menu':
 				return false;
 		}
 
 		if (!targetEl) return false;
 		this.collectMode = true;
-		this.pendingMenu = null;
 
 		const rect = targetEl.getBoundingClientRect();
 		targetEl.dispatchEvent(new MouseEvent('contextmenu', {
@@ -297,10 +244,7 @@ export default class MenuHiderPlugin extends Plugin {
 		const menuDom = document.querySelector('.menu') as HTMLElement | null;
 		if (menuDom) {
 			const entries = this.readEntriesFromDom(menuDom);
-
-			if (this.pendingMenu) {
-				this.attachSubmenusFromMenu(entries, this.pendingMenu);
-			}
+			await this.collectSubmenusViaDom(menuDom, entries);
 
 			if (entries.length > 0) {
 				this.collectedEntries[menuType] = entries;
@@ -311,50 +255,40 @@ export default class MenuHiderPlugin extends Plugin {
 		document.querySelectorAll('.menu').forEach(m => m.remove());
 		await new Promise<void>(r => setTimeout(r, 50));
 		this.collectMode = false;
-		this.pendingMenu = null;
 
 		return this.collectedEntries[menuType].length > 0;
 	}
 
-	private attachSubmenusFromMenu(entries: CollectedEntry[], menu: Menu) {
-		const internalItems = (menu as any).items as any[] | undefined;
-		if (!internalItems) return;
+	private async collectSubmenusViaDom(menuDom: HTMLElement, entries: CollectedEntry[]) {
+		const allItems = menuDom.querySelectorAll('.menu-item');
+		for (const itemEl of Array.from(allItems) as HTMLElement[]) {
+			if (!itemEl.querySelector('.menu-item-title ~ .menu-item-icon')) continue;
 
-		for (const item of internalItems) {
-			const submenu = item.submenu as Menu | null | undefined;
-			if (!submenu) continue;
-
-			const title = this.getItemTitle(item);
+			const title = itemEl.querySelector('.menu-item-title')?.textContent?.trim();
 			if (!title) continue;
 
-			const parentEntry = entries.find(e => e.type === 'item' && e.title === title);
-			if (!parentEntry || parentEntry.type !== 'item') continue;
+			itemEl.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+			itemEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
 
-			const submenuItems = (submenu as any).items as any[] | undefined;
-			if (!submenuItems || submenuItems.length === 0) continue;
+			await new Promise<void>(r => setTimeout(r, 250));
 
-			const children: CollectedEntry[] = [];
-			for (const si of submenuItems) {
-				const siTitle = this.getItemTitle(si);
-				if (siTitle) {
-					children.push({
-						type: 'item',
-						title: siTitle,
-						icon: this.getItemIcon(si),
-					});
+			const allMenus = document.querySelectorAll('.menu');
+			for (const m of Array.from(allMenus)) {
+				if (m instanceof HTMLElement && m !== menuDom) {
+					m.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
+					const children = this.readEntriesFromDom(m);
+					const parentEntry = entries.find(e => e.type === 'item' && e.title === title);
+					if (parentEntry && parentEntry.type === 'item' && children.length > 0) {
+						parentEntry.children = children;
+					}
+					m.remove();
+					break;
 				}
 			}
-			if (children.length > 0) {
-				parentEntry.children = children;
-			}
-		}
-	}
 
-	private getItemTitle(item: any): string | undefined {
-		if (item.title) return item.title;
-		if (item.titleEl) return item.titleEl.textContent?.trim();
-		if (item.dom) return item.dom.querySelector('.menu-item-title')?.textContent?.trim();
-		return undefined;
+			itemEl.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+			await new Promise<void>(r => setTimeout(r, 50));
+		}
 	}
 
 	private setupDomObserver() {
@@ -364,13 +298,13 @@ export default class MenuHiderPlugin extends Plugin {
 					if (!(node instanceof HTMLElement) || !node.classList.contains('menu')) continue;
 
 					if (this.collectMode) {
-						node.style.cssText = 'visibility:hidden!important;pointer-events:none!important;position:fixed;left:-9999px;top:-9999px;';
+						// Use opacity:0 instead of visibility:hidden so hover events still work for submenu collection
+						node.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
 						return;
 					}
 
 					const menuType = this.lastMenuType;
 					if (menuType) {
-						// For tab-menu, also collect passively from DOM
 						if (menuType === 'tab-menu') {
 							setTimeout(() => {
 								const entries = this.readEntriesFromDom(node);

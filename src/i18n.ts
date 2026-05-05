@@ -12,7 +12,8 @@ type TranslationKey =
 	| 'refresh'
 	| 'notice.open-explorer'
 	| 'notice.open-file'
-	| 'notice.right-click-url';
+	| 'notice.right-click-url'
+	| 'notice.passive-hint';
 
 const en: Record<TranslationKey, string> = {
 	'tab.file-menu-file': 'File',
@@ -29,6 +30,7 @@ const en: Record<TranslationKey, string> = {
 	'notice.open-explorer': 'Please open the file explorer first',
 	'notice.open-file': 'Please open a markdown file first',
 	'notice.right-click-url': 'Right-click a URL in the editor to collect',
+	'notice.passive-hint': 'Tab/URL/Multi-file menus: right-click to collect automatically',
 };
 
 const zh: Record<TranslationKey, string> = {
@@ -46,6 +48,7 @@ const zh: Record<TranslationKey, string> = {
 	'notice.open-explorer': '请先打开文件管理器',
 	'notice.open-file': '请先打开一个 Markdown 文件',
 	'notice.right-click-url': '在编辑器中右键点击链接以收集',
+	'notice.passive-hint': '标签页/URL/多文件菜单：请手动右键触发以自动收集',
 };
 
 const zhTW: Record<TranslationKey, string> = {
@@ -63,6 +66,7 @@ const zhTW: Record<TranslationKey, string> = {
 	'notice.open-explorer': '請先開啟檔案總管',
 	'notice.open-file': '請先開啟一個 Markdown 檔案',
 	'notice.right-click-url': '在編輯器中右鍵點選連結以收集',
+	'notice.passive-hint': '標籤頁/URL/多檔案選單：請手動右鍵觸發以自動收集',
 };
 
 const locales: Record<string, Record<TranslationKey, string>> = {
