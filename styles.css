@@ -199,7 +199,7 @@
 	flex-shrink: 0;
 	cursor: pointer;
 	border-radius: 4px;
-	color: var(--text-faint);
+	color: var(--text-muted);
 	transition: color 0.15s, background 0.15s;
 }
 
@@ -209,7 +209,8 @@
 }
 
 .menu-hider-eye.is-off {
-	color: var(--text-faint);
+	color: var(--color-red);
+	opacity: 0.5;
 }
 
 .menu-hider-eye svg {

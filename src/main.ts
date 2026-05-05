@@ -330,47 +330,64 @@ export default class MenuHiderPlugin extends Plugin {
 		if (hiddenTitles.size === 0 && hiddenSeps.size === 0) return;
 
 		const scrollEl = menuEl.querySelector('.menu-scroll') || menuEl;
-		let sepIndex = 0;
-		let hasContent = false;
+
+		// Build separator targets using the same dedup logic as readEntriesFromDom
+		type SepTarget = { type: 'dom'; el: HTMLElement } | { type: 'group'; el: HTMLElement };
+		const sepTargets: SepTarget[] = [];
+		let lastWasItem = false;
+
+		const pushSep = (target: SepTarget) => {
+			if (lastWasItem) {
+				sepTargets.push(target);
+				lastWasItem = false;
+			}
+		};
 
 		for (const child of Array.from(scrollEl.children) as HTMLElement[]) {
 			if (child.classList.contains('menu-separator')) {
-				if (hiddenSeps.has(sepIndex)) {
-					child.style.display = 'none';
-				}
-				sepIndex++;
+				pushSep({ type: 'dom', el: child });
 			} else if (child.classList.contains('menu-group')) {
-				if (hasContent) {
-					if (hiddenSeps.has(sepIndex)) {
-						child.classList.add('menu-hider-no-border');
-					}
-					sepIndex++;
-				}
-				hasContent = true;
+				pushSep({ type: 'group', el: child });
 
 				for (const item of Array.from(child.children) as HTMLElement[]) {
 					if (item.classList.contains('menu-item')) {
-						const title = item.querySelector('.menu-item-title')?.textContent?.trim();
-						if (title && hiddenTitles.has(title)) {
-							item.style.display = 'none';
-						}
+						lastWasItem = true;
 					} else if (item.classList.contains('menu-separator')) {
-						if (hiddenSeps.has(sepIndex)) {
-							item.style.display = 'none';
-						}
-						sepIndex++;
+						pushSep({ type: 'dom', el: item });
 					}
 				}
-
-				const visibleItems = child.querySelectorAll('.menu-item:not([style*="display: none"])');
-				if (visibleItems.length === 0) {
-					child.style.display = 'none';
-				}
 			} else if (child.classList.contains('menu-item')) {
-				const title = child.querySelector('.menu-item-title')?.textContent?.trim();
-				if (title && hiddenTitles.has(title)) {
-					child.style.display = 'none';
-				}
+				lastWasItem = true;
+			}
+		}
+
+		// Hide items by title
+		const allItems = menuEl.querySelectorAll('.menu-item');
+		for (const item of Array.from(allItems)) {
+			const title = item.querySelector('.menu-item-title')?.textContent?.trim();
+			if (title && hiddenTitles.has(title)) {
+				(item as HTMLElement).style.display = 'none';
+			}
+		}
+
+		// Hide separators by index
+		for (let i = 0; i < sepTargets.length; i++) {
+			if (!hiddenSeps.has(i)) continue;
+			const t = sepTargets[i];
+			if (!t) continue;
+			if (t.type === 'dom') {
+				t.el.style.display = 'none';
+			} else {
+				t.el.classList.add('menu-hider-no-border');
+			}
+		}
+
+		// Hide groups where all items are hidden
+		const groups = scrollEl.querySelectorAll('.menu-group');
+		for (const group of Array.from(groups) as HTMLElement[]) {
+			const visible = group.querySelectorAll('.menu-item:not([style*="display: none"])');
+			if (visible.length === 0) {
+				group.style.display = 'none';
 			}
 		}
 	}
