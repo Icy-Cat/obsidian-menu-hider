@@ -2,6 +2,7 @@ type TranslationKey =
 	| 'tab.file-menu-file'
 	| 'tab.file-menu-folder'
 	| 'tab.editor-menu'
+	| 'tab.tab-menu'
 	| 'tab.files-menu'
 	| 'tab.url-menu'
 	| 'empty.title'
@@ -17,6 +18,7 @@ const en: Record<TranslationKey, string> = {
 	'tab.file-menu-file': 'File',
 	'tab.file-menu-folder': 'Folder',
 	'tab.editor-menu': 'Editor',
+	'tab.tab-menu': 'Tab',
 	'tab.files-menu': 'Multi-file',
 	'tab.url-menu': 'URL',
 	'empty.title': 'No items collected yet.',
@@ -33,6 +35,7 @@ const zh: Record<TranslationKey, string> = {
 	'tab.file-menu-file': '文件',
 	'tab.file-menu-folder': '文件夹',
 	'tab.editor-menu': '编辑器',
+	'tab.tab-menu': '标签页',
 	'tab.files-menu': '多文件',
 	'tab.url-menu': 'URL',
 	'empty.title': '尚未收集到菜单项',
@@ -49,6 +52,7 @@ const zhTW: Record<TranslationKey, string> = {
 	'tab.file-menu-file': '檔案',
 	'tab.file-menu-folder': '資料夾',
 	'tab.editor-menu': '編輯器',
+	'tab.tab-menu': '標籤頁',
 	'tab.files-menu': '多檔案',
 	'tab.url-menu': 'URL',
 	'empty.title': '尚未收集到選單項',

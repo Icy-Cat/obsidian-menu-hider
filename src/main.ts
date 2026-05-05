@@ -2,12 +2,13 @@ import { Menu, Plugin, TFile, TFolder, TAbstractFile, Editor, MarkdownView, Noti
 import { MenuHiderSettings, DEFAULT_SETTINGS, MenuHiderSettingTab } from './settings';
 import { initLocale, t } from './i18n';
 
-export type MenuType = 'file-menu-file' | 'file-menu-folder' | 'editor-menu' | 'files-menu' | 'url-menu';
+export type MenuType = 'file-menu-file' | 'file-menu-folder' | 'editor-menu' | 'files-menu' | 'url-menu' | 'tab-menu';
 
 export const ALL_MENU_TYPES: MenuType[] = [
 	'file-menu-file',
 	'file-menu-folder',
 	'editor-menu',
+	'tab-menu',
 	'files-menu',
 	'url-menu',
 ];
@@ -32,6 +33,7 @@ function emptyEntries(): Record<MenuType, CollectedEntry[]> {
 		'editor-menu': [],
 		'files-menu': [],
 		'url-menu': [],
+		'tab-menu': [],
 	};
 }
 
@@ -99,6 +101,14 @@ export default class MenuHiderPlugin extends Plugin {
 			})
 		);
 
+		// Tab header context menu — no workspace event, detect via DOM
+		this.registerDomEvent(document, 'contextmenu', (evt: MouseEvent) => {
+			const target = evt.target as HTMLElement;
+			if (target?.closest('.workspace-tab-header')) {
+				this.lastMenuType = 'tab-menu';
+			}
+		}, true);
+
 		this.setupDomObserver();
 		this.addSettingTab(new MenuHiderSettingTab(this.app, this));
 	}
@@ -115,6 +125,7 @@ export default class MenuHiderPlugin extends Plugin {
 			const dom = (menu as any).dom as HTMLElement | undefined;
 			if (!dom) return;
 			const entries = this.readEntriesFromDom(dom);
+			this.attachSubmenusFromMenu(entries, menu);
 			if (entries.length > 0) {
 				this.collectedEntries[menuType] = entries;
 				this.persistEntries();
@@ -188,8 +199,26 @@ export default class MenuHiderPlugin extends Plugin {
 		return undefined;
 	}
 
+	private getItemIcon(item: any): string | undefined {
+		if (typeof item.icon === 'string' && item.icon) return item.icon;
+		if (item.iconEl) {
+			const svg = item.iconEl.querySelector('svg');
+			if (svg) {
+				const dataIcon = svg.getAttribute('data-icon');
+				if (dataIcon) return dataIcon;
+				for (const cls of Array.from(svg.classList) as string[]) {
+					if (cls.startsWith('lucide-')) return cls.substring(7);
+				}
+			}
+		}
+		if (item.dom) {
+			return this.detectIconFromDom(item.dom);
+		}
+		return undefined;
+	}
+
 	async triggerCollectAll(): Promise<void> {
-		const collectible: MenuType[] = ['file-menu-file', 'file-menu-folder', 'editor-menu'];
+		const collectible: MenuType[] = ['file-menu-file', 'file-menu-folder', 'editor-menu', 'tab-menu'];
 		for (const menuType of collectible) {
 			await this.triggerCollect(menuType);
 		}
@@ -229,8 +258,25 @@ export default class MenuHiderPlugin extends Plugin {
 				targetEl = view.contentEl.querySelector('.cm-content') || view.contentEl;
 				break;
 			}
+			case 'tab-menu': {
+				targetEl = document.querySelector('.workspace-tab-header.is-active');
+				if (!targetEl) targetEl = document.querySelector('.workspace-tab-header');
+				if (!targetEl) return false;
+				break;
+			}
+			case 'url-menu': {
+				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (!view) return false;
+				targetEl = view.contentEl.querySelector('a.external-link')
+					|| view.contentEl.querySelector('.cm-url')
+					|| view.contentEl.querySelector('a[href]');
+				if (!targetEl) {
+					new Notice(t('notice.right-click-url'));
+					return false;
+				}
+				break;
+			}
 			case 'files-menu':
-			case 'url-menu':
 				return false;
 		}
 
@@ -248,14 +294,12 @@ export default class MenuHiderPlugin extends Plugin {
 
 		await new Promise<void>(r => setTimeout(r, 200));
 
-		// Find the hidden menu DOM for main item order + separators
 		const menuDom = document.querySelector('.menu') as HTMLElement | null;
 		if (menuDom) {
 			const entries = this.readEntriesFromDom(menuDom);
 
-			// Read submenus from the captured Menu object's internal items
 			if (this.pendingMenu) {
-				this.attachSubmenus(entries, this.pendingMenu);
+				this.attachSubmenusFromMenu(entries, this.pendingMenu);
 			}
 
 			if (entries.length > 0) {
@@ -272,7 +316,7 @@ export default class MenuHiderPlugin extends Plugin {
 		return this.collectedEntries[menuType].length > 0;
 	}
 
-	private attachSubmenus(entries: CollectedEntry[], menu: Menu) {
+	private attachSubmenusFromMenu(entries: CollectedEntry[], menu: Menu) {
 		const internalItems = (menu as any).items as any[] | undefined;
 		if (!internalItems) return;
 
@@ -296,7 +340,7 @@ export default class MenuHiderPlugin extends Plugin {
 					children.push({
 						type: 'item',
 						title: siTitle,
-						icon: si.icon || undefined,
+						icon: this.getItemIcon(si),
 					});
 				}
 			}
@@ -326,6 +370,16 @@ export default class MenuHiderPlugin extends Plugin {
 
 					const menuType = this.lastMenuType;
 					if (menuType) {
+						// For tab-menu, also collect passively from DOM
+						if (menuType === 'tab-menu') {
+							setTimeout(() => {
+								const entries = this.readEntriesFromDom(node);
+								if (entries.length > 0) {
+									this.collectedEntries['tab-menu'] = entries;
+									this.persistEntries();
+								}
+							}, 0);
+						}
 						this.hideMenuItems(node, menuType);
 						this.lastMenuType = null;
 					}
