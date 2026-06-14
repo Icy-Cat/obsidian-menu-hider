@@ -30,6 +30,8 @@ const SIG_PRIORITY = {
 export default class MenuHiderPlugin extends Plugin {
 	settings: MenuHiderSettings;
 	private observer: MutationObserver | null = null;
+	private menuMeta = new WeakMap<HTMLElement, PendingSig>();
+	private activeSubmenuParent: HTMLElement | null = null;
 
 	private pending: PendingSig | null = null;
 	private pendingExpiresAt = 0;
@@ -45,9 +47,18 @@ export default class MenuHiderPlugin extends Plugin {
 		this.registerDomEvent(document, 'contextmenu', (evt: MouseEvent) => {
 			const target = evt.target as HTMLElement | null;
 			if (!target) return;
+			this.activeSubmenuParent = null;
 			this.pendingCoords = { x: evt.clientX, y: evt.clientY, expiresAt: Date.now() + 1000 };
 			const dom = this.computeDomSignature(target);
 			if (dom) this.setPending(dom.sig, dom.label, SIG_PRIORITY.dom);
+		}, true);
+
+		this.registerDomEvent(document, 'mouseover', (evt: MouseEvent) => {
+			const target = evt.target as HTMLElement | null;
+			const item = target?.closest('.menu-item') as HTMLElement | null;
+			if (item && this.itemHasSubmenu(item)) {
+				this.activeSubmenuParent = item;
+			}
 		}, true);
 
 		this.registerEvent(this.app.workspace.on('file-menu', (_menu: Menu, file: TAbstractFile) => {
@@ -134,13 +145,16 @@ export default class MenuHiderPlugin extends Plugin {
 						return;
 					}
 
-					// Submenu detection: another .menu already open → leave it alone.
 					const openMenus = document.querySelectorAll('.menu');
-					if (openMenus.length > 1) continue;
+					if (openMenus.length > 1) {
+						this.handleSubmenu(node, Array.from(openMenus).filter((m): m is HTMLElement => m instanceof HTMLElement));
+						continue;
+					}
 
 					const pending = this.consumePending();
 					const sig = pending?.sig ?? 'dom:unknown';
 					const label = pending?.label ?? t('label.unknown');
+					this.menuMeta.set(node, { sig, label, priority: pending?.priority ?? SIG_PRIORITY.dom });
 
 					const hidAny = this.applyHiding(node, sig);
 					this.applyOrdering(node, sig);
@@ -152,12 +166,87 @@ export default class MenuHiderPlugin extends Plugin {
 		this.observer.observe(document.body, { childList: true, subtree: true });
 	}
 
+	private handleSubmenu(submenuEl: HTMLElement, openMenus: HTMLElement[]) {
+		const parentItem = this.findActiveSubmenuParent(submenuEl, openMenus);
+		if (!parentItem) return;
+
+		const parentMenu = parentItem.closest('.menu');
+		if (!(parentMenu instanceof HTMLElement)) return;
+
+		const meta = this.menuMeta.get(parentMenu);
+		if (!meta) return;
+
+		this.menuMeta.set(submenuEl, meta);
+		const parentTitle = this.getMenuItemTitle(parentItem);
+		if (!parentTitle) return;
+
+		const children = this.readEntriesFromDom(submenuEl);
+		if (children.length === 0) return;
+
+		this.mergeSubmenuEntries(meta.sig, meta.label, parentTitle, children);
+		this.applyHiding(submenuEl, meta.sig);
+	}
+
+	private findActiveSubmenuParent(submenuEl: HTMLElement, openMenus: HTMLElement[]): HTMLElement | null {
+		const parentMenus = openMenus.filter(menu => menu !== submenuEl);
+		if (
+			this.activeSubmenuParent &&
+			parentMenus.some(menu => menu.contains(this.activeSubmenuParent)) &&
+			this.itemHasSubmenu(this.activeSubmenuParent)
+		) {
+			return this.activeSubmenuParent;
+		}
+
+		for (const menu of parentMenus) {
+			const hovered = Array.from(menu.querySelectorAll('.menu-item:hover'))
+				.filter((item): item is HTMLElement => item instanceof HTMLElement && this.itemHasSubmenu(item))
+				.pop();
+			if (hovered) return hovered;
+		}
+
+		for (const menu of parentMenus.reverse()) {
+			const submenuItems = Array.from(menu.querySelectorAll('.menu-item'))
+				.filter((item): item is HTMLElement => item instanceof HTMLElement && this.itemHasSubmenu(item));
+			if (submenuItems.length > 0) return submenuItems[submenuItems.length - 1] ?? null;
+		}
+
+		return null;
+	}
+
+	private mergeSubmenuEntries(sig: string, label: string, parentTitle: string, children: CollectedEntry[]) {
+		const rec = this.settings.menus[sig];
+		if (!rec) {
+			this.settings.menus[sig] = {
+				signature: sig,
+				label,
+				entries: [{
+					type: 'item',
+					title: parentTitle,
+					children,
+				}],
+				hiddenItems: [],
+				hiddenSeparators: [],
+				order: [],
+				lastSeenAt: Date.now(),
+			};
+			void this.saveSettings();
+			return;
+		}
+
+		const parentEntry = rec.entries.find(entry => entry.type === 'item' && entry.title === parentTitle);
+		if (!parentEntry || parentEntry.type !== 'item') return;
+
+		parentEntry.children = children;
+		rec.lastSeenAt = Date.now();
+		void this.saveSettings();
+	}
+
 	private collectIntoRegistry(node: HTMLElement, sig: string, label: string) {
 		const entries = this.readEntriesFromDom(node);
 		if (entries.length === 0) return;
 		const existing = this.settings.menus[sig];
 		if (existing) {
-			existing.entries = entries;
+			existing.entries = this.preserveExistingChildren(existing.entries, entries);
 			existing.lastSeenAt = Date.now();
 			if (!existing.label) existing.label = label;
 		} else {
@@ -172,6 +261,23 @@ export default class MenuHiderPlugin extends Plugin {
 			};
 		}
 		void this.saveSettings();
+	}
+
+	private preserveExistingChildren(existingEntries: CollectedEntry[], nextEntries: CollectedEntry[]): CollectedEntry[] {
+		const childrenByTitle = new Map<string, CollectedEntry[]>();
+		for (const entry of existingEntries) {
+			if (entry.type === 'item' && entry.children && entry.children.length > 0) {
+				childrenByTitle.set(entry.title, entry.children);
+			}
+		}
+		for (const entry of nextEntries) {
+			if (entry.type !== 'item') continue;
+			const existingChildren = childrenByTitle.get(entry.title);
+			if (existingChildren && (!entry.children || entry.children.length === 0)) {
+				entry.children = existingChildren;
+			}
+		}
+		return nextEntries;
 	}
 
 	private addSeparator(entries: CollectedEntry[]) {
@@ -209,16 +315,39 @@ export default class MenuHiderPlugin extends Plugin {
 	}
 
 	private collectSingleItem(el: HTMLElement, entries: CollectedEntry[]) {
-		const title = el.querySelector('.menu-item-title')?.textContent?.trim();
+		const title = this.getMenuItemTitle(el);
 		if (!title) return;
 		const icon = this.detectIconFromDom(el);
-		const hasSubmenu = !!el.querySelector('.menu-item-title ~ .menu-item-icon');
+		const hasSubmenu = this.itemHasSubmenu(el);
 		entries.push({
 			type: 'item',
 			title,
 			icon: icon || undefined,
 			children: hasSubmenu ? [] : undefined,
 		});
+	}
+
+	private getMenuItemTitle(el: HTMLElement): string | null {
+		return el.querySelector('.menu-item-title')?.textContent?.trim() || null;
+	}
+
+	private itemHasSubmenu(el: HTMLElement): boolean {
+		const titleEl = el.querySelector('.menu-item-title');
+		if (!titleEl) return false;
+		for (const child of Array.from(el.children)) {
+			if (child === titleEl) continue;
+			if (titleEl.compareDocumentPosition(child) & Node.DOCUMENT_POSITION_FOLLOWING) {
+				const item = child as HTMLElement;
+				if (
+					item.classList.contains('menu-item-icon') ||
+					item.classList.contains('menu-item-submenu') ||
+					item.classList.contains('menu-item-chevron')
+				) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	private detectIconFromDom(itemEl: HTMLElement): string | undefined {
@@ -316,9 +445,9 @@ export default class MenuHiderPlugin extends Plugin {
 	private async collectSubmenusViaDom(menuDom: HTMLElement, entries: CollectedEntry[]) {
 		const allItems = menuDom.querySelectorAll('.menu-item');
 		for (const itemEl of Array.from(allItems) as HTMLElement[]) {
-			if (!itemEl.querySelector('.menu-item-title ~ .menu-item-icon')) continue;
+			if (!this.itemHasSubmenu(itemEl)) continue;
 
-			const title = itemEl.querySelector('.menu-item-title')?.textContent?.trim();
+			const title = this.getMenuItemTitle(itemEl);
 			if (!title) continue;
 
 			itemEl.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
