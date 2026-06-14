@@ -1,17 +1,6 @@
 import { Menu, Plugin, TFile, TFolder, TAbstractFile, Editor, MarkdownView, Notice } from 'obsidian';
-import { MenuHiderSettings, DEFAULT_SETTINGS, MenuHiderSettingTab } from './settings';
+import { MenuHiderSettings, MenuHiderSettingTab, MenuRecord } from './settings';
 import { initLocale, t } from './i18n';
-
-export type MenuType = 'file-menu-file' | 'file-menu-folder' | 'editor-menu' | 'files-menu' | 'url-menu' | 'tab-menu';
-
-export const ALL_MENU_TYPES: MenuType[] = [
-	'file-menu-file',
-	'file-menu-folder',
-	'editor-menu',
-	'tab-menu',
-	'files-menu',
-	'url-menu',
-];
 
 export interface CollectedMenuItem {
 	type: 'item';
@@ -26,71 +15,63 @@ export interface CollectedSeparator {
 
 export type CollectedEntry = CollectedMenuItem | CollectedSeparator;
 
-function emptyEntries(): Record<MenuType, CollectedEntry[]> {
-	return {
-		'file-menu-file': [],
-		'file-menu-folder': [],
-		'editor-menu': [],
-		'files-menu': [],
-		'url-menu': [],
-		'tab-menu': [],
-	};
+interface PendingSig {
+	sig: string;
+	label: string;
+	priority: number; // higher overrides lower within the same tick
 }
+
+const SIG_PRIORITY = {
+	dom: 1,
+	event: 2,
+	urlOverride: 3,
+} as const;
 
 export default class MenuHiderPlugin extends Plugin {
 	settings: MenuHiderSettings;
-	collectedEntries: Record<MenuType, CollectedEntry[]> = emptyEntries();
-
 	private observer: MutationObserver | null = null;
-	private lastMenuType: MenuType | null = null;
+
+	private pending: PendingSig | null = null;
+	private pendingExpiresAt = 0;
+	private pendingCoords: { x: number; y: number; expiresAt: number } | null = null;
 	private collectMode = false;
 
 	async onload() {
 		await this.loadSettings();
 		initLocale();
 
-		if (this.settings.savedEntries) {
-			this.collectedEntries = { ...emptyEntries(), ...this.settings.savedEntries };
-		}
-
-		this.registerEvent(
-			this.app.workspace.on('file-menu', (menu: Menu, file: TAbstractFile, source: string) => {
-				if (this.lastMenuType === 'tab-menu') return;
-				const menuType: MenuType = file instanceof TFolder ? 'file-menu-folder' : 'file-menu-file';
-				this.lastMenuType = menuType;
-				if (!this.collectMode) this.deferCollectFromDom(menu, menuType);
-			})
-		);
-
-		this.registerEvent(
-			this.app.workspace.on('editor-menu', (menu: Menu, editor: Editor, view: MarkdownView) => {
-				this.lastMenuType = 'editor-menu';
-				if (!this.collectMode) this.deferCollectFromDom(menu, 'editor-menu');
-			})
-		);
-
-		this.registerEvent(
-			// @ts-ignore
-			this.app.workspace.on('files-menu', (menu: Menu, files: TAbstractFile[], source: string) => {
-				this.lastMenuType = 'files-menu';
-				if (!this.collectMode) this.deferCollectFromDom(menu, 'files-menu');
-			})
-		);
-
-		this.registerEvent(
-			// @ts-ignore
-			this.app.workspace.on('url-menu', (menu: Menu, url: string) => {
-				this.lastMenuType = 'url-menu';
-				if (!this.collectMode) this.deferCollectFromDom(menu, 'url-menu');
-			})
-		);
-
+		// Capture-phase contextmenu — runs before Obsidian's internal handlers.
+		// Sets a low-priority DOM-based signature; semantic events override it.
 		this.registerDomEvent(document, 'contextmenu', (evt: MouseEvent) => {
-			const target = evt.target as HTMLElement;
-			if (target?.closest('.workspace-tab-header')) {
-				this.lastMenuType = 'tab-menu';
-			}
+			const target = evt.target as HTMLElement | null;
+			if (!target) return;
+			this.pendingCoords = { x: evt.clientX, y: evt.clientY, expiresAt: Date.now() + 1000 };
+			const dom = this.computeDomSignature(target);
+			if (dom) this.setPending(dom.sig, dom.label, SIG_PRIORITY.dom);
 		}, true);
+
+		this.registerEvent(this.app.workspace.on('file-menu', (_menu: Menu, file: TAbstractFile) => {
+			const isFolder = file instanceof TFolder;
+			this.setPending(
+				isFolder ? 'event:file-menu-folder' : 'event:file-menu-file',
+				t(isFolder ? 'label.file-menu-folder' : 'label.file-menu-file'),
+				SIG_PRIORITY.event,
+			);
+		}));
+
+		this.registerEvent(this.app.workspace.on('editor-menu', () => {
+			this.setPending('event:editor-menu', t('label.editor-menu'), SIG_PRIORITY.event);
+		}));
+
+		// @ts-ignore — files-menu exists at runtime
+		this.registerEvent(this.app.workspace.on('files-menu', () => {
+			this.setPending('event:files-menu', t('label.files-menu'), SIG_PRIORITY.event);
+		}));
+
+		// @ts-ignore — url-menu exists at runtime; fires after editor-menu, must override
+		this.registerEvent(this.app.workspace.on('url-menu', () => {
+			this.setPending('event:url-menu', t('label.url-menu'), SIG_PRIORITY.urlOverride);
+		}));
 
 		this.setupDomObserver();
 		this.addSettingTab(new MenuHiderSettingTab(this.app, this));
@@ -103,16 +84,94 @@ export default class MenuHiderPlugin extends Plugin {
 		}
 	}
 
-	private deferCollectFromDom(_menu: Menu, menuType: MenuType) {
-		setTimeout(() => {
-			const dom = (_menu as any).dom as HTMLElement | undefined;
-			if (!dom) return;
-			const entries = this.readEntriesFromDom(dom);
-			if (entries.length > 0) {
-				this.collectedEntries[menuType] = entries;
-				this.persistEntries();
+	private setPending(sig: string, label: string, priority: number) {
+		const now = Date.now();
+		if (this.pending && now <= this.pendingExpiresAt && priority < this.pending.priority) return;
+		this.pending = { sig, label, priority };
+		this.pendingExpiresAt = now + 1000;
+	}
+
+	private consumePending(): PendingSig | null {
+		if (!this.pending) return null;
+		if (Date.now() > this.pendingExpiresAt) { this.pending = null; return null; }
+		const p = this.pending;
+		this.pending = null;
+		return p;
+	}
+
+	private computeDomSignature(target: HTMLElement): { sig: string; label: string } | null {
+		const known: Array<{ selector: string; sig: string; labelKey: 'label.tab-menu' | 'label.file-menu-folder' | 'label.file-menu-file' | 'label.editor-menu' }> = [
+			{ selector: '.workspace-tab-header', sig: 'dom:tab-header', labelKey: 'label.tab-menu' },
+			{ selector: '.nav-folder-title', sig: 'dom:nav-folder', labelKey: 'label.file-menu-folder' },
+			{ selector: '.nav-file-title', sig: 'dom:nav-file', labelKey: 'label.file-menu-file' },
+			{ selector: '.cm-content', sig: 'dom:editor', labelKey: 'label.editor-menu' },
+		];
+		for (const k of known) {
+			if (target.closest(k.selector)) return { sig: k.sig, label: t(k.labelKey) };
+		}
+		const leaf = target.closest('[data-type]') as HTMLElement | null;
+		if (leaf) {
+			const dt = leaf.getAttribute('data-type');
+			if (dt) return { sig: `view:${dt}`, label: dt };
+		}
+		// Last resort: nearest tagname.first-class
+		const cls = (target.className && typeof target.className === 'string')
+			? target.className.split(/\s+/).find(c => c.length > 0)
+			: null;
+		const tag = target.tagName.toLowerCase();
+		const sig = cls ? `dom:${tag}.${cls}` : `dom:${tag}`;
+		return { sig, label: sig };
+	}
+
+	private setupDomObserver() {
+		this.observer = new MutationObserver((mutations) => {
+			for (const mutation of mutations) {
+				for (const node of Array.from(mutation.addedNodes)) {
+					if (!(node instanceof HTMLElement) || !node.classList.contains('menu')) continue;
+
+					if (this.collectMode) {
+						node.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
+						return;
+					}
+
+					// Submenu detection: another .menu already open → leave it alone.
+					const openMenus = document.querySelectorAll('.menu');
+					if (openMenus.length > 1) continue;
+
+					const pending = this.consumePending();
+					const sig = pending?.sig ?? 'dom:unknown';
+					const label = pending?.label ?? t('label.unknown');
+
+					const hidAny = this.applyHiding(node, sig);
+					this.applyOrdering(node, sig);
+					if (hidAny) this.repositionMenu(node);
+					setTimeout(() => this.collectIntoRegistry(node, sig, label), 0);
+				}
 			}
-		}, 0);
+		});
+		this.observer.observe(document.body, { childList: true, subtree: true });
+	}
+
+	private collectIntoRegistry(node: HTMLElement, sig: string, label: string) {
+		const entries = this.readEntriesFromDom(node);
+		if (entries.length === 0) return;
+		const existing = this.settings.menus[sig];
+		if (existing) {
+			existing.entries = entries;
+			existing.lastSeenAt = Date.now();
+			if (!existing.label) existing.label = label;
+		} else {
+			this.settings.menus[sig] = {
+				signature: sig,
+				label,
+				entries,
+				hiddenItems: [],
+				hiddenSeparators: [],
+				order: [],
+				lastSeenAt: Date.now(),
+			};
+		}
+		void this.saveSettings();
 	}
 
 	private addSeparator(entries: CollectedEntry[]) {
@@ -181,51 +240,36 @@ export default class MenuHiderPlugin extends Plugin {
 		return undefined;
 	}
 
-	async triggerCollectAll(): Promise<void> {
-		const collectible: MenuType[] = ['file-menu-file', 'file-menu-folder', 'editor-menu'];
-		for (const menuType of collectible) {
-			await this.triggerCollect(menuType);
-		}
-		new Notice(t('notice.passive-hint'));
-	}
-
-	async triggerCollect(menuType: MenuType): Promise<boolean> {
+	/**
+	 * Synthesize a contextmenu on a known target to populate a menu signature.
+	 * Returns true if the signature now has entries.
+	 */
+	async triggerCollect(sig: string): Promise<boolean> {
 		let targetEl: Element | null = null;
 
-		switch (menuType) {
-			case 'file-menu-folder': {
+		switch (sig) {
+			case 'event:file-menu-folder':
+			case 'dom:nav-folder': {
 				const leaves = this.app.workspace.getLeavesOfType('file-explorer');
-				const leaf = leaves[0];
-				if (leaf && leaf.view) {
-					const containerEl = (leaf.view as any).containerEl as HTMLElement | undefined;
-					if (containerEl) {
-						targetEl = containerEl.querySelector('.nav-folder-title');
-					}
-				}
-				if (!targetEl) return false;
+				const containerEl = (leaves[0]?.view as any)?.containerEl as HTMLElement | undefined;
+				targetEl = containerEl?.querySelector('.nav-folder-title') ?? null;
 				break;
 			}
-			case 'file-menu-file': {
+			case 'event:file-menu-file':
+			case 'dom:nav-file': {
 				const leaves = this.app.workspace.getLeavesOfType('file-explorer');
-				const leaf = leaves[0];
-				if (leaf && leaf.view) {
-					const containerEl = (leaf.view as any).containerEl as HTMLElement | undefined;
-					if (containerEl) {
-						targetEl = containerEl.querySelector('.nav-file-title');
-					}
-				}
-				if (!targetEl) return false;
+				const containerEl = (leaves[0]?.view as any)?.containerEl as HTMLElement | undefined;
+				targetEl = containerEl?.querySelector('.nav-file-title') ?? null;
 				break;
 			}
-			case 'editor-menu': {
+			case 'event:editor-menu':
+			case 'dom:editor': {
 				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 				if (!view) return false;
 				targetEl = view.contentEl.querySelector('.cm-content') || view.contentEl;
 				break;
 			}
-			case 'tab-menu':
-			case 'files-menu':
-			case 'url-menu':
+			default:
 				return false;
 		}
 
@@ -248,8 +292,17 @@ export default class MenuHiderPlugin extends Plugin {
 			await this.collectSubmenusViaDom(menuDom, entries);
 
 			if (entries.length > 0) {
-				this.collectedEntries[menuType] = entries;
-				this.persistEntries();
+				const existing = this.settings.menus[sig];
+				const label = existing?.label ?? t('label.unknown');
+				this.settings.menus[sig] = {
+					signature: sig,
+					label,
+					entries,
+					hiddenItems: existing?.hiddenItems ?? [],
+					hiddenSeparators: existing?.hiddenSeparators ?? [],
+					lastSeenAt: Date.now(),
+				};
+				await this.saveSettings();
 			}
 		}
 
@@ -257,7 +310,7 @@ export default class MenuHiderPlugin extends Plugin {
 		await new Promise<void>(r => setTimeout(r, 50));
 		this.collectMode = false;
 
-		return this.collectedEntries[menuType].length > 0;
+		return (this.settings.menus[sig]?.entries.length ?? 0) > 0;
 	}
 
 	private async collectSubmenusViaDom(menuDom: HTMLElement, entries: CollectedEntry[]) {
@@ -292,46 +345,16 @@ export default class MenuHiderPlugin extends Plugin {
 		}
 	}
 
-	private setupDomObserver() {
-		this.observer = new MutationObserver((mutations) => {
-			for (const mutation of mutations) {
-				for (const node of Array.from(mutation.addedNodes)) {
-					if (!(node instanceof HTMLElement) || !node.classList.contains('menu')) continue;
+	private applyHiding(menuEl: HTMLElement, sig: string): boolean {
+		const rec = this.settings.menus[sig];
+		if (!rec) return false;
 
-					if (this.collectMode) {
-						// Use opacity:0 instead of visibility:hidden so hover events still work for submenu collection
-						node.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
-						return;
-					}
-
-					const menuType = this.lastMenuType;
-					if (menuType) {
-						if (menuType === 'tab-menu') {
-							setTimeout(() => {
-								const entries = this.readEntriesFromDom(node);
-								if (entries.length > 0) {
-									this.collectedEntries['tab-menu'] = entries;
-									this.persistEntries();
-								}
-							}, 0);
-						}
-						this.hideMenuItems(node, menuType);
-						this.lastMenuType = null;
-					}
-				}
-			}
-		});
-		this.observer.observe(document.body, { childList: true, subtree: true });
-	}
-
-	private hideMenuItems(menuEl: HTMLElement, menuType: MenuType) {
-		const hiddenTitles = new Set(this.settings.hiddenItems[menuType]);
-		const hiddenSeps = new Set(this.settings.hiddenSeparators[menuType]);
-		if (hiddenTitles.size === 0 && hiddenSeps.size === 0) return;
+		const hiddenTitles = new Set(rec.hiddenItems);
+		const hiddenSeps = new Set(rec.hiddenSeparators);
+		if (hiddenTitles.size === 0 && hiddenSeps.size === 0) return false;
 
 		const scrollEl = menuEl.querySelector('.menu-scroll') || menuEl;
 
-		// Build separator targets using the same dedup logic as readEntriesFromDom
 		type SepTarget = { type: 'dom'; el: HTMLElement } | { type: 'group'; el: HTMLElement };
 		const sepTargets: SepTarget[] = [];
 		let lastWasItem = false;
@@ -348,7 +371,6 @@ export default class MenuHiderPlugin extends Plugin {
 				pushSep({ type: 'dom', el: child });
 			} else if (child.classList.contains('menu-group')) {
 				pushSep({ type: 'group', el: child });
-
 				for (const item of Array.from(child.children) as HTMLElement[]) {
 					if (item.classList.contains('menu-item')) {
 						lastWasItem = true;
@@ -361,7 +383,6 @@ export default class MenuHiderPlugin extends Plugin {
 			}
 		}
 
-		// Hide items by title
 		const allItems = menuEl.querySelectorAll('.menu-item');
 		for (const item of Array.from(allItems)) {
 			const title = item.querySelector('.menu-item-title')?.textContent?.trim();
@@ -370,19 +391,17 @@ export default class MenuHiderPlugin extends Plugin {
 			}
 		}
 
-		// Hide separators by index
 		for (let i = 0; i < sepTargets.length; i++) {
 			if (!hiddenSeps.has(i)) continue;
-			const t = sepTargets[i];
-			if (!t) continue;
-			if (t.type === 'dom') {
-				t.el.style.display = 'none';
+			const tgt = sepTargets[i];
+			if (!tgt) continue;
+			if (tgt.type === 'dom') {
+				tgt.el.style.display = 'none';
 			} else {
-				t.el.classList.add('menu-hider-no-border');
+				tgt.el.classList.add('menu-hider-no-border');
 			}
 		}
 
-		// Hide groups where all items are hidden
 		const groups = scrollEl.querySelectorAll('.menu-group');
 		for (const group of Array.from(groups) as HTMLElement[]) {
 			const visible = group.querySelectorAll('.menu-item:not([style*="display: none"])');
@@ -390,29 +409,231 @@ export default class MenuHiderPlugin extends Plugin {
 				group.style.display = 'none';
 			}
 		}
+		return true;
 	}
 
-	private async persistEntries() {
-		this.settings.savedEntries = this.collectedEntries;
-		await this.saveSettings();
+	private applyOrdering(menuEl: HTMLElement, sig: string) {
+		const rec = this.settings.menus[sig];
+		const order = rec?.order;
+		if (!order || order.length === 0) return;
+
+		const rank = new Map<string, number>();
+		order.forEach((title, i) => rank.set(title, i));
+
+		const scrollEl = (menuEl.querySelector('.menu-scroll') || menuEl) as HTMLElement;
+		// Reorder within each container (groups + scroll root) to preserve grouping.
+		const containers: HTMLElement[] = [scrollEl, ...Array.from(scrollEl.querySelectorAll('.menu-group')) as HTMLElement[]];
+
+		for (const container of containers) {
+			const items = Array.from(container.children).filter(
+				(c): c is HTMLElement => c instanceof HTMLElement && c.classList.contains('menu-item'),
+			);
+			if (items.length < 2) continue;
+
+			const indexed = items.map((el, origIdx) => {
+				const title = el.querySelector('.menu-item-title')?.textContent?.trim() ?? '';
+				const r = rank.get(title);
+				return { el, origIdx, rank: r === undefined ? Infinity : r };
+			});
+			const sorted = [...indexed].sort((a, b) => {
+				if (a.rank !== b.rank) return a.rank - b.rank;
+				return a.origIdx - b.origIdx;
+			});
+
+			// Only reflow if order actually changed.
+			const changed = sorted.some((s, i) => s.el !== items[i]);
+			if (!changed) continue;
+
+			for (const s of sorted) {
+				container.appendChild(s.el);
+			}
+		}
+	}
+
+	private repositionMenu(menuEl: HTMLElement) {
+		const coords = this.pendingCoords;
+		if (!coords || Date.now() > coords.expiresAt) return;
+		// Consume so submenus opened later don't snap back to the cursor.
+		this.pendingCoords = null;
+
+		// Defer one frame so layout reflects the just-applied display:none.
+		requestAnimationFrame(() => {
+			const rect = menuEl.getBoundingClientRect();
+			const vw = window.innerWidth;
+			const vh = window.innerHeight;
+			const margin = 4;
+
+			let x = coords.x;
+			let y = coords.y;
+			if (x + rect.width + margin > vw) x = Math.max(margin, vw - rect.width - margin);
+			if (y + rect.height + margin > vh) y = Math.max(margin, vh - rect.height - margin);
+
+			menuEl.style.left = `${x}px`;
+			menuEl.style.top = `${y}px`;
+			menuEl.style.right = 'auto';
+			menuEl.style.bottom = 'auto';
+		});
 	}
 
 	async loadSettings() {
-		const data = await this.loadData() as Partial<MenuHiderSettings> | null;
-		const defaultHidden: Record<string, string[]> = {};
-		const defaultSeps: Record<string, number[]> = {};
-		for (const mt of ALL_MENU_TYPES) {
-			defaultHidden[mt] = [];
-			defaultSeps[mt] = [];
+		const data = await this.loadData() as any;
+		this.settings = { menus: {} };
+
+		// New-format data
+		if (data && typeof data === 'object' && data.menus && typeof data.menus === 'object') {
+			for (const [sig, rec] of Object.entries(data.menus)) {
+				const r = rec as Partial<MenuRecord>;
+				this.settings.menus[sig] = {
+					signature: sig,
+					label: r.label || sig,
+					entries: r.entries || [],
+					hiddenItems: r.hiddenItems || [],
+					hiddenSeparators: r.hiddenSeparators || [],
+					lastSeenAt: r.lastSeenAt || 0,
+				};
+			}
+			return;
 		}
-		this.settings = {
-			hiddenItems: { ...defaultHidden, ...data?.hiddenItems } as Record<MenuType, string[]>,
-			hiddenSeparators: { ...defaultSeps, ...data?.hiddenSeparators } as Record<MenuType, number[]>,
-			savedEntries: data?.savedEntries || undefined,
-		};
+
+		// Legacy migration
+		if (data && typeof data === 'object') {
+			const legacyMap: Record<string, { sig: string; labelKey: 'label.file-menu-file' | 'label.file-menu-folder' | 'label.editor-menu' | 'label.tab-menu' | 'label.files-menu' | 'label.url-menu' }> = {
+				'file-menu-file': { sig: 'event:file-menu-file', labelKey: 'label.file-menu-file' },
+				'file-menu-folder': { sig: 'event:file-menu-folder', labelKey: 'label.file-menu-folder' },
+				'editor-menu': { sig: 'event:editor-menu', labelKey: 'label.editor-menu' },
+				'tab-menu': { sig: 'dom:tab-header', labelKey: 'label.tab-menu' },
+				'files-menu': { sig: 'event:files-menu', labelKey: 'label.files-menu' },
+				'url-menu': { sig: 'event:url-menu', labelKey: 'label.url-menu' },
+			};
+			const hiddenItems = data.hiddenItems || {};
+			const hiddenSeps = data.hiddenSeparators || {};
+			const savedEntries = data.savedEntries || {};
+			for (const [legacyKey, m] of Object.entries(legacyMap)) {
+				const items = hiddenItems[legacyKey] || [];
+				const seps = hiddenSeps[legacyKey] || [];
+				const entries = savedEntries[legacyKey] || [];
+				if (items.length === 0 && seps.length === 0 && entries.length === 0) continue;
+				this.settings.menus[m.sig] = {
+					signature: m.sig,
+					label: t(m.labelKey),
+					entries,
+					hiddenItems: items,
+					hiddenSeparators: seps,
+					lastSeenAt: 0,
+				};
+			}
+			if (Object.keys(this.settings.menus).length > 0) {
+				await this.saveSettings();
+			}
+		}
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	async deleteMenu(sig: string) {
+		delete this.settings.menus[sig];
+		await this.saveSettings();
+	}
+
+	/** Sort items within each separator-bounded segment by user-defined rank. */
+	applyOrderToEntries(rec: { order?: string[] }, entries: CollectedEntry[]): CollectedEntry[] {
+		const order = rec.order;
+		if (!order || order.length === 0) return entries;
+		const rank = new Map<string, number>();
+		order.forEach((t, i) => rank.set(t, i));
+
+		const result: CollectedEntry[] = [];
+		let bucket: CollectedMenuItem[] = [];
+		const flushBucket = () => {
+			bucket.sort((a, b) => {
+				const ra = rank.get(a.title) ?? Infinity;
+				const rb = rank.get(b.title) ?? Infinity;
+				return ra - rb;
+			});
+			result.push(...bucket);
+			bucket = [];
+		};
+		for (const e of entries) {
+			if (e.type === 'separator') {
+				flushBucket();
+				result.push(e);
+			} else {
+				bucket.push(e);
+			}
+		}
+		flushBucket();
+		return result;
+	}
+
+	/**
+	 * Persist a new top-level title order. Titles not in the list are appended in their
+	 * natural sequence; titles that no longer exist in entries are dropped.
+	 */
+	async setOrder(sig: string, titles: string[]) {
+		const rec = this.settings.menus[sig];
+		if (!rec) return;
+		const allTitles = rec.entries
+			.filter(e => e.type === 'item')
+			.map(e => (e as CollectedMenuItem).title);
+		const seen = new Set<string>();
+		const next: string[] = [];
+		for (const tt of titles) {
+			if (allTitles.includes(tt) && !seen.has(tt)) {
+				next.push(tt);
+				seen.add(tt);
+			}
+		}
+		for (const tt of allTitles) {
+			if (!seen.has(tt)) next.push(tt);
+		}
+		rec.order = next;
+		await this.saveSettings();
+	}
+
+	/**
+	 * Move a top-level item up (-1) or down (+1) within its separator-bounded segment.
+	 * Operates on the flat sequence of top-level items as they appear in entries
+	 * (separators are skipped — items "jump over" separators).
+	 */
+	async moveItem(sig: string, title: string, direction: -1 | 1) {
+		const rec = this.settings.menus[sig];
+		if (!rec) return;
+
+		// Determine neighbor in the currently displayed (ordered) entries, within the same segment.
+		const displayed = this.applyOrderToEntries(rec, rec.entries);
+		const idx = displayed.findIndex(e => e.type === 'item' && (e as CollectedMenuItem).title === title);
+		if (idx < 0) return;
+		const neighborIdx = idx + direction;
+		if (neighborIdx < 0 || neighborIdx >= displayed.length) return;
+		const neighbor = displayed[neighborIdx];
+		if (!neighbor || neighbor.type !== 'item') return;
+		const neighborTitle = (neighbor as CollectedMenuItem).title;
+
+		const allTitles = rec.entries
+			.filter(e => e.type === 'item')
+			.map(e => (e as CollectedMenuItem).title);
+
+		let order = rec.order && rec.order.length > 0 ? [...rec.order] : [...allTitles];
+		for (const tt of allTitles) {
+			if (!order.includes(tt)) order.push(tt);
+		}
+		order = order.filter(tt => allTitles.includes(tt));
+
+		const a = order.indexOf(title);
+		const b = order.indexOf(neighborTitle);
+		if (a < 0 || b < 0) return;
+		[order[a], order[b]] = [order[b]!, order[a]!];
+		rec.order = order;
+		await this.saveSettings();
+	}
+
+	/** Reset user-defined order back to natural order. */
+	async resetOrder(sig: string) {
+		const rec = this.settings.menus[sig];
+		if (!rec) return;
+		rec.order = [];
+		await this.saveSettings();
 	}
 }

@@ -1,72 +1,88 @@
 type TranslationKey =
-	| 'tab.file-menu-file'
-	| 'tab.file-menu-folder'
-	| 'tab.editor-menu'
-	| 'tab.tab-menu'
-	| 'tab.files-menu'
-	| 'tab.url-menu'
+	| 'label.file-menu-file'
+	| 'label.file-menu-folder'
+	| 'label.editor-menu'
+	| 'label.tab-menu'
+	| 'label.files-menu'
+	| 'label.url-menu'
+	| 'label.unknown'
 	| 'empty.title'
 	| 'empty.hint'
+	| 'empty.no-menus'
 	| 'eye.hide'
 	| 'eye.show'
 	| 'refresh'
-	| 'notice.open-explorer'
-	| 'notice.open-file'
-	| 'notice.right-click-url'
+	| 'delete'
+	| 'move-up'
+	| 'move-down'
+	| 'reset-order'
+	| 'drag-to-reorder'
 	| 'notice.passive-hint';
 
 const en: Record<TranslationKey, string> = {
-	'tab.file-menu-file': 'File',
-	'tab.file-menu-folder': 'Folder',
-	'tab.editor-menu': 'Editor',
-	'tab.tab-menu': 'Tab',
-	'tab.files-menu': 'Multi-file',
-	'tab.url-menu': 'URL',
+	'label.file-menu-file': 'File',
+	'label.file-menu-folder': 'Folder',
+	'label.editor-menu': 'Editor',
+	'label.tab-menu': 'Tab',
+	'label.files-menu': 'Multi-file',
+	'label.url-menu': 'URL',
+	'label.unknown': 'Unknown menu',
 	'empty.title': 'No items collected yet.',
-	'empty.hint': 'Click the refresh button, or right-click in Obsidian to collect.',
+	'empty.hint': 'Right-click in Obsidian to auto-discover menus.',
+	'empty.no-menus': 'No menus discovered yet — right-click anywhere in Obsidian.',
 	'eye.hide': 'Click to hide',
 	'eye.show': 'Click to show',
 	'refresh': 'Refresh',
-	'notice.open-explorer': 'Please open the file explorer first',
-	'notice.open-file': 'Please open a markdown file first',
-	'notice.right-click-url': 'Right-click a URL in the editor to collect',
-	'notice.passive-hint': 'Tab/URL/Multi-file menus: right-click to collect automatically',
+	'delete': 'Delete',
+	'move-up': 'Move up',
+	'move-down': 'Move down',
+	'reset-order': 'Reset order',
+	'drag-to-reorder': 'Drag to reorder',
+	'notice.passive-hint': 'Right-click the corresponding element to collect this menu',
 };
 
 const zh: Record<TranslationKey, string> = {
-	'tab.file-menu-file': '文件',
-	'tab.file-menu-folder': '文件夹',
-	'tab.editor-menu': '编辑器',
-	'tab.tab-menu': '标签页',
-	'tab.files-menu': '多文件',
-	'tab.url-menu': 'URL',
+	'label.file-menu-file': '文件',
+	'label.file-menu-folder': '文件夹',
+	'label.editor-menu': '编辑器',
+	'label.tab-menu': '标签页',
+	'label.files-menu': '多文件',
+	'label.url-menu': 'URL',
+	'label.unknown': '未知菜单',
 	'empty.title': '尚未收集到菜单项',
-	'empty.hint': '点击刷新按钮，或在 Obsidian 中右键以收集。',
+	'empty.hint': '在 Obsidian 中右键即可自动发现菜单。',
+	'empty.no-menus': '尚未发现任何菜单 —— 在 Obsidian 中任意位置右键试试。',
 	'eye.hide': '点击隐藏',
 	'eye.show': '点击显示',
 	'refresh': '刷新',
-	'notice.open-explorer': '请先打开文件管理器',
-	'notice.open-file': '请先打开一个 Markdown 文件',
-	'notice.right-click-url': '在编辑器中右键点击链接以收集',
-	'notice.passive-hint': '标签页/URL/多文件菜单：请手动右键触发以自动收集',
+	'delete': '删除',
+	'move-up': '上移',
+	'move-down': '下移',
+	'reset-order': '重置排序',
+	'drag-to-reorder': '拖动以排序',
+	'notice.passive-hint': '请右键对应元素以收集此菜单',
 };
 
 const zhTW: Record<TranslationKey, string> = {
-	'tab.file-menu-file': '檔案',
-	'tab.file-menu-folder': '資料夾',
-	'tab.editor-menu': '編輯器',
-	'tab.tab-menu': '標籤頁',
-	'tab.files-menu': '多檔案',
-	'tab.url-menu': 'URL',
+	'label.file-menu-file': '檔案',
+	'label.file-menu-folder': '資料夾',
+	'label.editor-menu': '編輯器',
+	'label.tab-menu': '標籤頁',
+	'label.files-menu': '多檔案',
+	'label.url-menu': 'URL',
+	'label.unknown': '未知選單',
 	'empty.title': '尚未收集到選單項',
-	'empty.hint': '點選重新整理按鈕，或在 Obsidian 中右鍵以收集。',
+	'empty.hint': '在 Obsidian 中右鍵即可自動探索選單。',
+	'empty.no-menus': '尚未探索到任何選單 —— 在 Obsidian 中任意位置右鍵試試。',
 	'eye.hide': '點選隱藏',
 	'eye.show': '點選顯示',
 	'refresh': '重新整理',
-	'notice.open-explorer': '請先開啟檔案總管',
-	'notice.open-file': '請先開啟一個 Markdown 檔案',
-	'notice.right-click-url': '在編輯器中右鍵點選連結以收集',
-	'notice.passive-hint': '標籤頁/URL/多檔案選單：請手動右鍵觸發以自動收集',
+	'delete': '刪除',
+	'move-up': '上移',
+	'move-down': '下移',
+	'reset-order': '重設排序',
+	'drag-to-reorder': '拖曳以排序',
+	'notice.passive-hint': '請右鍵對應元素以收集此選單',
 };
 
 const locales: Record<string, Record<TranslationKey, string>> = {

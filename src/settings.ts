@@ -1,35 +1,35 @@
 import { App, Notice, PluginSettingTab, setIcon } from 'obsidian';
-import MenuHiderPlugin, { MenuType, CollectedEntry, ALL_MENU_TYPES } from './main';
+import Sortable from 'sortablejs';
+import MenuHiderPlugin, { CollectedEntry } from './main';
 import { t } from './i18n';
 
-export interface MenuHiderSettings {
-	hiddenItems: Record<MenuType, string[]>;
-	hiddenSeparators: Record<MenuType, number[]>;
-	savedEntries?: Record<MenuType, CollectedEntry[]>;
+export interface MenuRecord {
+	signature: string;
+	label: string;
+	entries: CollectedEntry[];
+	hiddenItems: string[];
+	hiddenSeparators: number[];
+	/** User-defined order of item titles. Items not listed keep their original position. */
+	order?: string[];
+	lastSeenAt: number;
 }
 
-export const DEFAULT_SETTINGS: MenuHiderSettings = {
-	hiddenItems: {
-		'file-menu-file': [],
-		'file-menu-folder': [],
-		'editor-menu': [],
-		'tab-menu': [],
-		'files-menu': [],
-		'url-menu': [],
-	},
-	hiddenSeparators: {
-		'file-menu-file': [],
-		'file-menu-folder': [],
-		'editor-menu': [],
-		'tab-menu': [],
-		'files-menu': [],
-		'url-menu': [],
-	},
-};
+export interface MenuHiderSettings {
+	menus: Record<string, MenuRecord>;
+}
+
+const TRIGGERABLE_SIGS = new Set([
+	'event:file-menu-file',
+	'event:file-menu-folder',
+	'event:editor-menu',
+	'dom:nav-file',
+	'dom:nav-folder',
+	'dom:editor',
+]);
 
 export class MenuHiderSettingTab extends PluginSettingTab {
 	plugin: MenuHiderPlugin;
-	activeTab: MenuType = 'file-menu-file';
+	activeSig: string | null = null;
 
 	constructor(app: App, plugin: MenuHiderPlugin) {
 		super(app, plugin);
@@ -41,46 +41,96 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		containerEl.addClass('menu-hider-settings');
 
-		const header = containerEl.createDiv({ cls: 'menu-hider-header' });
+		const sigs = Object.keys(this.plugin.settings.menus).sort((a, b) => {
+			const ra = this.plugin.settings.menus[a];
+			const rb = this.plugin.settings.menus[b];
+			return (rb?.lastSeenAt ?? 0) - (ra?.lastSeenAt ?? 0);
+		});
 
+		if (this.activeSig === null || !sigs.includes(this.activeSig)) {
+			this.activeSig = sigs[0] ?? null;
+		}
+
+		const header = containerEl.createDiv({ cls: 'menu-hider-header' });
 		const tabBar = header.createDiv({ cls: 'menu-hider-tabs' });
-		for (const menuType of ALL_MENU_TYPES) {
-			const tab = tabBar.createEl('button', {
-				text: t(`tab.${menuType}`),
-				cls: 'menu-hider-tab',
+
+		if (sigs.length === 0) {
+			tabBar.createSpan({ cls: 'menu-hider-empty-tabs', text: t('empty.no-menus') });
+		} else {
+			for (const sig of sigs) {
+				const rec = this.plugin.settings.menus[sig];
+				if (!rec) continue;
+				const tab = tabBar.createEl('button', {
+					text: rec.label || sig,
+					cls: 'menu-hider-tab',
+					attr: { title: sig },
+				});
+				if (sig === this.activeSig) tab.addClass('is-active');
+				tab.addEventListener('click', () => {
+					this.activeSig = sig;
+					this.display();
+				});
+			}
+		}
+
+		if (this.activeSig && TRIGGERABLE_SIGS.has(this.activeSig)) {
+			const refreshBtn = header.createEl('button', {
+				cls: 'menu-hider-refresh-btn',
+				attr: { 'aria-label': t('refresh') },
 			});
-			if (menuType === this.activeTab) tab.addClass('is-active');
-			tab.addEventListener('click', () => {
-				this.activeTab = menuType;
-				this.display();
+			setIcon(refreshBtn, 'refresh-cw');
+			refreshBtn.addEventListener('click', async () => {
+				if (!this.activeSig) return;
+				refreshBtn.disabled = true;
+				refreshBtn.addClass('is-spinning');
+				const ok = await this.plugin.triggerCollect(this.activeSig);
+				refreshBtn.disabled = false;
+				refreshBtn.removeClass('is-spinning');
+				if (ok) this.display();
+				else new Notice(t('notice.passive-hint'));
 			});
 		}
 
-		const refreshBtn = header.createEl('button', {
-			cls: 'menu-hider-refresh-btn',
-			attr: { 'aria-label': t('refresh') },
-		});
-		setIcon(refreshBtn, 'refresh-cw');
-		refreshBtn.addEventListener('click', async () => {
-			refreshBtn.disabled = true;
-			refreshBtn.addClass('is-spinning');
-			const ok = await this.plugin.triggerCollect(this.activeTab);
-			refreshBtn.disabled = false;
-			refreshBtn.removeClass('is-spinning');
-			if (ok) {
-				this.display();
-			} else {
-				new Notice(t('notice.passive-hint'));
-			}
-		});
+		if (this.activeSig) {
+			const rec = this.plugin.settings.menus[this.activeSig];
+			if (rec) {
+				const meta = containerEl.createDiv({ cls: 'menu-hider-meta' });
+				meta.createSpan({ text: rec.signature, cls: 'menu-hider-sig' });
+				if (rec.order && rec.order.length > 0) {
+					const resetBtn = meta.createEl('button', {
+						cls: 'menu-hider-delete-btn',
+						text: t('reset-order'),
+					});
+					resetBtn.addEventListener('click', async () => {
+						await this.plugin.resetOrder(rec.signature);
+						this.display();
+					});
+				}
+				const delBtn = meta.createEl('button', {
+					cls: 'menu-hider-delete-btn',
+					attr: { 'aria-label': t('delete') },
+					text: t('delete'),
+				});
+				delBtn.addEventListener('click', async () => {
+					await this.plugin.deleteMenu(rec.signature);
+					this.activeSig = null;
+					this.display();
+				});
 
-		const menuList = containerEl.createDiv({ cls: 'menu-hider-menu-list' });
-		this.renderEntries(menuList, this.activeTab, this.plugin.collectedEntries[this.activeTab], 0);
+				const menuList = containerEl.createDiv({ cls: 'menu-hider-menu-list' });
+				this.renderEntries(menuList, rec, this.plugin.applyOrderToEntries(rec, rec.entries), 0);
+			}
+		} else {
+			const empty = containerEl.createDiv({ cls: 'menu-hider-empty' });
+			empty.createSpan({ text: t('empty.title') });
+			empty.createEl('br');
+			empty.createSpan({ text: t('empty.hint') });
+		}
 	}
 
-	private renderEntries(containerEl: HTMLElement, menuType: MenuType, entries: CollectedEntry[], depth: number) {
-		const hiddenItems = new Set(this.plugin.settings.hiddenItems[menuType]);
-		const hiddenSeps = new Set(this.plugin.settings.hiddenSeparators[menuType]);
+	private renderEntries(containerEl: HTMLElement, rec: MenuRecord, entries: CollectedEntry[], depth: number) {
+		const hiddenItems = new Set(rec.hiddenItems);
+		const hiddenSeps = new Set(rec.hiddenSeparators);
 
 		if (entries.length === 0) {
 			const empty = containerEl.createDiv({ cls: 'menu-hider-empty' });
@@ -90,10 +140,24 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 			return;
 		}
 
+		// At depth 0 we wrap consecutive items into segment containers so Sortable
+		// can govern reordering within each segment (no cross-segment drags).
+		const segmentEls: HTMLElement[] = [];
+		let currentSegment: HTMLElement | null = null;
+
+		const openSegment = () => {
+			if (!currentSegment && depth === 0) {
+				currentSegment = containerEl.createDiv({ cls: 'menu-hider-segment' });
+				segmentEls.push(currentSegment);
+			}
+		};
+		const closeSegment = () => { currentSegment = null; };
+
 		let sepIndex = 0;
 		for (const entry of entries) {
 			if (entry.type === 'separator') {
 				if (depth === 0) {
+					closeSegment();
 					const idx = sepIndex;
 					const isHidden = hiddenSeps.has(idx);
 					const row = containerEl.createDiv({
@@ -101,7 +165,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 					});
 					row.createDiv({ cls: 'menu-hider-separator-line' });
 					this.addEyeToggle(row, !isHidden, async (visible) => {
-						const list = this.plugin.settings.hiddenSeparators[menuType];
+						const list = rec.hiddenSeparators;
 						if (visible) {
 							const i = list.indexOf(idx);
 							if (i >= 0) list.splice(i, 1);
@@ -116,11 +180,22 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 			} else {
 				const isHidden = hiddenItems.has(entry.title);
 				const hasChildren = entry.children && entry.children.length > 0;
-				const row = containerEl.createDiv({
+				openSegment();
+				const parent = (depth === 0 && currentSegment) ? currentSegment : containerEl;
+				const row = parent.createDiv({
 					cls: `menu-hider-row menu-hider-item-row${isHidden ? ' is-hidden-entry' : ''}${depth > 0 ? ' menu-hider-child' : ''}`,
 				});
+				row.dataset.title = entry.title;
 				if (depth > 0) {
 					row.style.paddingLeft = `${6 + depth * 16}px`;
+				}
+
+				if (depth === 0) {
+					const handle = row.createDiv({
+						cls: 'menu-hider-drag-handle',
+						attr: { 'aria-label': t('drag-to-reorder') },
+					});
+					setIcon(handle, 'grip-vertical');
 				}
 
 				const left = row.createDiv({ cls: 'menu-hider-item-left' });
@@ -136,7 +211,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 				}
 
 				this.addEyeToggle(row, !isHidden, async (visible) => {
-					const list = this.plugin.settings.hiddenItems[menuType];
+					const list = rec.hiddenItems;
 					if (visible) {
 						const i = list.indexOf(entry.title);
 						if (i >= 0) list.splice(i, 1);
@@ -148,8 +223,32 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 				});
 
 				if (hasChildren) {
-					this.renderEntries(containerEl, menuType, entry.children!, depth + 1);
+					closeSegment();
+					this.renderEntries(containerEl, rec, entry.children!, depth + 1);
 				}
+			}
+		}
+
+		if (depth === 0) {
+			for (const seg of segmentEls) {
+				Sortable.create(seg, {
+					handle: '.menu-hider-drag-handle',
+					animation: 150,
+					ghostClass: 'menu-hider-row-ghost',
+					chosenClass: 'menu-hider-row-chosen',
+					dragClass: 'menu-hider-row-drag',
+					onEnd: async () => {
+						const newOrder: string[] = [];
+						for (const s of segmentEls) {
+							for (const row of Array.from(s.children) as HTMLElement[]) {
+								const tt = row.dataset.title;
+								if (tt) newOrder.push(tt);
+							}
+						}
+						await this.plugin.setOrder(rec.signature, newOrder);
+						this.display();
+					},
+				});
 			}
 		}
 	}

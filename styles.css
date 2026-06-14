@@ -11,6 +11,45 @@
 	display: flex;
 	gap: 4px;
 	flex: 1;
+	flex-wrap: wrap;
+}
+
+.menu-hider-empty-tabs {
+	color: var(--text-muted);
+	font-size: 12px;
+	padding: 6px 4px;
+}
+
+.menu-hider-meta {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 4px 0 8px;
+	font-size: 11px;
+	color: var(--text-muted);
+}
+
+.menu-hider-sig {
+	font-family: var(--font-monospace);
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.menu-hider-delete-btn {
+	padding: 2px 8px;
+	font-size: 11px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+.menu-hider-delete-btn:hover {
+	background: var(--background-modifier-error-hover, var(--background-modifier-hover));
+	color: var(--text-error, var(--text-normal));
 }
 
 .menu-hider-tab {
@@ -187,6 +226,53 @@
 	flex: 1;
 	height: 1px;
 	background: var(--background-modifier-border);
+}
+
+/* Segment container (Sortable scope) */
+.menu-hider-segment {
+	display: flex;
+	flex-direction: column;
+}
+
+/* Drag handle */
+.menu-hider-drag-handle {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 22px;
+	flex-shrink: 0;
+	cursor: grab;
+	color: var(--text-faint);
+	transition: color 0.15s;
+}
+
+.menu-hider-drag-handle:hover {
+	color: var(--text-normal);
+}
+
+.menu-hider-drag-handle:active {
+	cursor: grabbing;
+}
+
+.menu-hider-drag-handle svg {
+	width: 14px;
+	height: 14px;
+}
+
+/* Sortable states */
+.menu-hider-row-ghost {
+	opacity: 0.35;
+	background: var(--background-modifier-hover) !important;
+}
+
+.menu-hider-row-chosen {
+	background: var(--background-modifier-hover);
+}
+
+.menu-hider-row-drag {
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+	background: var(--background-primary);
 }
 
 /* Eye toggle */
