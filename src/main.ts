@@ -1,5 +1,5 @@
-import { Menu, Plugin, TFile, TFolder, TAbstractFile, Editor, MarkdownView, Notice } from 'obsidian';
-import { MenuHiderSettings, MenuHiderSettingTab, MenuRecord } from './settings';
+import { Menu, Plugin, TFolder, TAbstractFile, MarkdownView } from 'obsidian';
+import { MenuHiderSettings, MenuHiderSettingTab, MenuRecord, PromotedRef } from './settings';
 import { initLocale, t } from './i18n';
 
 export interface CollectedMenuItem {
@@ -7,6 +7,8 @@ export interface CollectedMenuItem {
 	title: string;
 	icon?: string;
 	children?: CollectedEntry[];
+	/** Display-only: this top-level row was promoted out of the named submenu. */
+	promotedFrom?: string;
 }
 
 export interface CollectedSeparator {
@@ -27,15 +29,28 @@ const SIG_PRIORITY = {
 	urlOverride: 3,
 } as const;
 
+// Runtime shape of obsidian's Menu / MenuItem (not in the public d.ts, stable for years).
+interface RtMenuItem {
+	dom: HTMLElement;
+	titleEl?: HTMLElement;
+	submenu?: RtMenu;
+}
+interface RtMenu extends Menu {
+	dom: HTMLElement;
+	items: RtMenuItem[];
+	parentMenu?: RtMenu;
+}
+
+const PROMOTED_CLASS = 'menu-hider-promoted';
+
 export default class MenuHiderPlugin extends Plugin {
 	settings: MenuHiderSettings;
-	private observer: MutationObserver | null = null;
-	private menuMeta = new WeakMap<HTMLElement, PendingSig>();
-	private activeSubmenuParent: HTMLElement | null = null;
+	private menuMeta = new WeakMap<Menu, PendingSig>();
+	private lastTopMenu: RtMenu | null = null;
 
 	private pending: PendingSig | null = null;
 	private pendingExpiresAt = 0;
-	private pendingCoords: { x: number; y: number; expiresAt: number } | null = null;
+	private forcedSig: string | null = null;
 	private collectMode = false;
 
 	async onload() {
@@ -47,18 +62,8 @@ export default class MenuHiderPlugin extends Plugin {
 		this.registerDomEvent(document, 'contextmenu', (evt: MouseEvent) => {
 			const target = evt.target as HTMLElement | null;
 			if (!target) return;
-			this.activeSubmenuParent = null;
-			this.pendingCoords = { x: evt.clientX, y: evt.clientY, expiresAt: Date.now() + 1000 };
 			const dom = this.computeDomSignature(target);
 			if (dom) this.setPending(dom.sig, dom.label, SIG_PRIORITY.dom);
-		}, true);
-
-		this.registerDomEvent(document, 'mouseover', (evt: MouseEvent) => {
-			const target = evt.target as HTMLElement | null;
-			const item = target?.closest('.menu-item') as HTMLElement | null;
-			if (item && this.itemHasSubmenu(item)) {
-				this.activeSubmenuParent = item;
-			}
 		}, true);
 
 		this.registerEvent(this.app.workspace.on('file-menu', (_menu: Menu, file: TAbstractFile) => {
@@ -84,14 +89,68 @@ export default class MenuHiderPlugin extends Plugin {
 			this.setPending('event:url-menu', t('label.url-menu'), SIG_PRIORITY.urlOverride);
 		}));
 
-		this.setupDomObserver();
+		this.patchMenu();
 		this.addSettingTab(new MenuHiderSettingTab(this.app, this));
 	}
 
-	onunload() {
-		if (this.observer) {
-			this.observer.disconnect();
-			this.observer = null;
+	/** Every Menu.show* path ends in showAtPosition — hook it to get the Menu instance. */
+	private patchMenu() {
+		const proto = Menu.prototype as unknown as { showAtPosition: (...args: unknown[]) => Menu };
+		const orig = proto.showAtPosition;
+		const self = this;
+		proto.showAtPosition = function (this: RtMenu, ...args: unknown[]) {
+			try { self.beforeShow(this); } catch (e) { console.error('[menu-hider] beforeShow', e); }
+			const result = orig.apply(this, args);
+			try { self.afterShow(this); } catch (e) { console.error('[menu-hider] afterShow', e); }
+			return result;
+		};
+		this.register(() => { proto.showAtPosition = orig; });
+	}
+
+	private parentOf(menu: RtMenu): RtMenu | null {
+		if (menu.parentMenu) return menu.parentMenu;
+		const top = this.lastTopMenu;
+		if (top && top !== menu && top.dom.isConnected) return top;
+		return null;
+	}
+
+	private beforeShow(menu: RtMenu) {
+		const parent = this.parentOf(menu);
+		let meta: PendingSig | undefined;
+		if (parent) {
+			meta = this.menuMeta.get(parent);
+			if (!meta) return;
+		} else {
+			const pending = this.consumePending();
+			const sig = this.forcedSig ?? pending?.sig ?? 'dom:unknown';
+			const label = pending?.label ?? this.settings.menus[sig]?.label ?? t('label.unknown');
+			meta = { sig, label, priority: pending?.priority ?? SIG_PRIORITY.dom };
+			this.lastTopMenu = menu;
+		}
+		this.menuMeta.set(menu, meta);
+
+		const rec = this.settings.menus[meta.sig];
+		if (!rec) return;
+		// Hide before Obsidian positions the menu so the measured size is already correct.
+		this.hideItems(menu, rec);
+		if (!parent) this.promoteItems(menu, rec);
+	}
+
+	private afterShow(menu: RtMenu) {
+		const meta = this.menuMeta.get(menu);
+		if (!meta) return;
+		const rec = this.settings.menus[meta.sig];
+		const isTop = !this.parentOf(menu);
+		if (rec) {
+			this.hideSeparators(menu.dom, rec);
+			if (isTop) {
+				this.placePromoted(menu);
+				this.applyOrdering(menu.dom, rec);
+			}
+		}
+		if (isTop) this.collectIntoRegistry(menu, meta);
+		if (this.collectMode) {
+			menu.dom.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
 		}
 	}
 
@@ -134,125 +193,27 @@ export default class MenuHiderPlugin extends Plugin {
 		return { sig, label: sig };
 	}
 
-	private setupDomObserver() {
-		this.observer = new MutationObserver((mutations) => {
-			for (const mutation of mutations) {
-				for (const node of Array.from(mutation.addedNodes)) {
-					if (!(node instanceof HTMLElement) || !node.classList.contains('menu')) continue;
+	// ---------- collection ----------
 
-					if (this.collectMode) {
-						node.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
-						return;
-					}
-
-					const openMenus = document.querySelectorAll('.menu');
-					if (openMenus.length > 1) {
-						this.handleSubmenu(node, Array.from(openMenus).filter((m): m is HTMLElement => m instanceof HTMLElement));
-						continue;
-					}
-
-					const pending = this.consumePending();
-					const sig = pending?.sig ?? 'dom:unknown';
-					const label = pending?.label ?? t('label.unknown');
-					this.menuMeta.set(node, { sig, label, priority: pending?.priority ?? SIG_PRIORITY.dom });
-
-					const hidAny = this.applyHiding(node, sig);
-					this.applyOrdering(node, sig);
-					if (hidAny) this.repositionMenu(node);
-					setTimeout(() => this.collectIntoRegistry(node, sig, label), 0);
-				}
-			}
-		});
-		this.observer.observe(document.body, { childList: true, subtree: true });
-	}
-
-	private handleSubmenu(submenuEl: HTMLElement, openMenus: HTMLElement[]) {
-		const parentItem = this.findActiveSubmenuParent(submenuEl, openMenus);
-		if (!parentItem) return;
-
-		const parentMenu = parentItem.closest('.menu');
-		if (!(parentMenu instanceof HTMLElement)) return;
-
-		const meta = this.menuMeta.get(parentMenu);
-		if (!meta) return;
-
-		this.menuMeta.set(submenuEl, meta);
-		const parentTitle = this.getMenuItemTitle(parentItem);
-		if (!parentTitle) return;
-
-		const children = this.readEntriesFromDom(submenuEl);
-		if (children.length === 0) return;
-
-		this.mergeSubmenuEntries(meta.sig, meta.label, parentTitle, children);
-		this.applyHiding(submenuEl, meta.sig);
-	}
-
-	private findActiveSubmenuParent(submenuEl: HTMLElement, openMenus: HTMLElement[]): HTMLElement | null {
-		const parentMenus = openMenus.filter(menu => menu !== submenuEl);
-		if (
-			this.activeSubmenuParent &&
-			parentMenus.some(menu => menu.contains(this.activeSubmenuParent)) &&
-			this.itemHasSubmenu(this.activeSubmenuParent)
-		) {
-			return this.activeSubmenuParent;
-		}
-
-		for (const menu of parentMenus) {
-			const hovered = Array.from(menu.querySelectorAll('.menu-item:hover'))
-				.filter((item): item is HTMLElement => item instanceof HTMLElement && this.itemHasSubmenu(item))
-				.pop();
-			if (hovered) return hovered;
-		}
-
-		for (const menu of parentMenus.reverse()) {
-			const submenuItems = Array.from(menu.querySelectorAll('.menu-item'))
-				.filter((item): item is HTMLElement => item instanceof HTMLElement && this.itemHasSubmenu(item));
-			if (submenuItems.length > 0) return submenuItems[submenuItems.length - 1] ?? null;
-		}
-
-		return null;
-	}
-
-	private mergeSubmenuEntries(sig: string, label: string, parentTitle: string, children: CollectedEntry[]) {
-		const rec = this.settings.menus[sig];
-		if (!rec) {
-			this.settings.menus[sig] = {
-				signature: sig,
-				label,
-				entries: [{
-					type: 'item',
-					title: parentTitle,
-					children,
-				}],
-				hiddenItems: [],
-				hiddenSeparators: [],
-				order: [],
-				lastSeenAt: Date.now(),
-			};
-			void this.saveSettings();
-			return;
-		}
-
-		const parentEntry = rec.entries.find(entry => entry.type === 'item' && entry.title === parentTitle);
-		if (!parentEntry || parentEntry.type !== 'item') return;
-
-		parentEntry.children = children;
-		rec.lastSeenAt = Date.now();
-		void this.saveSettings();
-	}
-
-	private collectIntoRegistry(node: HTMLElement, sig: string, label: string) {
-		const entries = this.readEntriesFromDom(node);
+	private collectIntoRegistry(menu: RtMenu, meta: PendingSig) {
+		const entries = this.readEntriesFromDom(menu.dom);
 		if (entries.length === 0) return;
-		const existing = this.settings.menus[sig];
+		// Submenu items exist before the submenu is ever shown — read them directly.
+		for (const item of menu.items) {
+			if (!item.submenu) continue;
+			const title = this.getMenuItemTitle(item.dom);
+			const entry = entries.find(e => e.type === 'item' && e.title === title);
+			if (entry && entry.type === 'item') entry.children = this.readEntriesFromDom(item.submenu.dom);
+		}
+		const existing = this.settings.menus[meta.sig];
 		if (existing) {
-			existing.entries = this.preserveExistingChildren(existing.entries, entries);
+			existing.entries = entries;
 			existing.lastSeenAt = Date.now();
-			if (!existing.label) existing.label = label;
+			if (!existing.label) existing.label = meta.label;
 		} else {
-			this.settings.menus[sig] = {
-				signature: sig,
-				label,
+			this.settings.menus[meta.sig] = {
+				signature: meta.sig,
+				label: meta.label,
 				entries,
 				hiddenItems: [],
 				hiddenSeparators: [],
@@ -261,23 +222,6 @@ export default class MenuHiderPlugin extends Plugin {
 			};
 		}
 		void this.saveSettings();
-	}
-
-	private preserveExistingChildren(existingEntries: CollectedEntry[], nextEntries: CollectedEntry[]): CollectedEntry[] {
-		const childrenByTitle = new Map<string, CollectedEntry[]>();
-		for (const entry of existingEntries) {
-			if (entry.type === 'item' && entry.children && entry.children.length > 0) {
-				childrenByTitle.set(entry.title, entry.children);
-			}
-		}
-		for (const entry of nextEntries) {
-			if (entry.type !== 'item') continue;
-			const existingChildren = childrenByTitle.get(entry.title);
-			if (existingChildren && (!entry.children || entry.children.length === 0)) {
-				entry.children = existingChildren;
-			}
-		}
-		return nextEntries;
 	}
 
 	private addSeparator(entries: CollectedEntry[]) {
@@ -315,58 +259,26 @@ export default class MenuHiderPlugin extends Plugin {
 	}
 
 	private collectSingleItem(el: HTMLElement, entries: CollectedEntry[]) {
+		if (el.classList.contains(PROMOTED_CLASS)) return;
 		const title = this.getMenuItemTitle(el);
 		if (!title) return;
 		const icon = this.detectIconFromDom(el);
-		const hasSubmenu = this.itemHasSubmenu(el);
-		entries.push({
-			type: 'item',
-			title,
-			icon: icon || undefined,
-			children: hasSubmenu ? [] : undefined,
-		});
+		entries.push({ type: 'item', title, icon: icon || undefined });
 	}
 
 	private getMenuItemTitle(el: HTMLElement): string | null {
 		return el.querySelector('.menu-item-title')?.textContent?.trim() || null;
 	}
 
-	private itemHasSubmenu(el: HTMLElement): boolean {
-		const titleEl = el.querySelector('.menu-item-title');
-		if (!titleEl) return false;
-		for (const child of Array.from(el.children)) {
-			if (child === titleEl) continue;
-			if (titleEl.compareDocumentPosition(child) & Node.DOCUMENT_POSITION_FOLLOWING) {
-				const item = child as HTMLElement;
-				if (
-					item.classList.contains('menu-item-icon') ||
-					item.classList.contains('menu-item-submenu') ||
-					item.classList.contains('menu-item-chevron')
-				) {
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
 	private detectIconFromDom(itemEl: HTMLElement): string | undefined {
-		const iconContainer = itemEl.querySelector('.menu-item-icon');
-		if (!iconContainer) return undefined;
-		const svg = iconContainer.querySelector('svg');
+		const svg = itemEl.querySelector('.menu-item-icon svg');
 		if (!svg) return undefined;
-
 		const dataIcon = svg.getAttribute('data-icon');
 		if (dataIcon) return dataIcon;
-
 		for (const cls of Array.from(svg.classList)) {
 			if (cls.startsWith('lucide-')) return cls.substring(7);
 		}
-
-		const parent = svg.closest('[data-icon]');
-		if (parent) return parent.getAttribute('data-icon') || undefined;
-
-		return undefined;
+		return svg.closest('[data-icon]')?.getAttribute('data-icon') || undefined;
 	}
 
 	/**
@@ -404,6 +316,7 @@ export default class MenuHiderPlugin extends Plugin {
 
 		if (!targetEl) return false;
 		this.collectMode = true;
+		this.forcedSig = sig;
 
 		const rect = targetEl.getBoundingClientRect();
 		targetEl.dispatchEvent(new MouseEvent('contextmenu', {
@@ -414,136 +327,102 @@ export default class MenuHiderPlugin extends Plugin {
 		}));
 
 		await new Promise<void>(r => setTimeout(r, 200));
-
-		const menuDom = document.querySelector('.menu') as HTMLElement | null;
-		if (menuDom) {
-			const entries = this.readEntriesFromDom(menuDom);
-			await this.collectSubmenusViaDom(menuDom, entries);
-
-			if (entries.length > 0) {
-				const existing = this.settings.menus[sig];
-				const label = existing?.label ?? t('label.unknown');
-				this.settings.menus[sig] = {
-					signature: sig,
-					label,
-					entries,
-					hiddenItems: existing?.hiddenItems ?? [],
-					hiddenSeparators: existing?.hiddenSeparators ?? [],
-					lastSeenAt: Date.now(),
-				};
-				await this.saveSettings();
-			}
-		}
-
+		this.lastTopMenu?.hide();
 		document.querySelectorAll('.menu').forEach(m => m.remove());
-		await new Promise<void>(r => setTimeout(r, 50));
+		this.forcedSig = null;
 		this.collectMode = false;
 
 		return (this.settings.menus[sig]?.entries.length ?? 0) > 0;
 	}
 
-	private async collectSubmenusViaDom(menuDom: HTMLElement, entries: CollectedEntry[]) {
-		const allItems = menuDom.querySelectorAll('.menu-item');
-		for (const itemEl of Array.from(allItems) as HTMLElement[]) {
-			if (!this.itemHasSubmenu(itemEl)) continue;
+	// ---------- runtime: hide / promote / order ----------
 
-			const title = this.getMenuItemTitle(itemEl);
-			if (!title) continue;
-
-			itemEl.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-			itemEl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-
-			await new Promise<void>(r => setTimeout(r, 250));
-
-			const allMenus = document.querySelectorAll('.menu');
-			for (const m of Array.from(allMenus)) {
-				if (m instanceof HTMLElement && m !== menuDom) {
-					m.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
-					const children = this.readEntriesFromDom(m);
-					const parentEntry = entries.find(e => e.type === 'item' && e.title === title);
-					if (parentEntry && parentEntry.type === 'item' && children.length > 0) {
-						parentEntry.children = children;
-					}
-					m.remove();
-					break;
-				}
-			}
-
-			itemEl.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-			await new Promise<void>(r => setTimeout(r, 50));
+	private hideItems(menu: RtMenu, rec: MenuRecord) {
+		if (rec.hiddenItems.length === 0) return;
+		const hidden = new Set(rec.hiddenItems);
+		for (const item of menu.items) {
+			const title = this.getMenuItemTitle(item.dom);
+			if (title && hidden.has(title)) item.dom.style.display = 'none';
 		}
 	}
 
-	private applyHiding(menuEl: HTMLElement, sig: string): boolean {
-		const rec = this.settings.menus[sig];
-		if (!rec) return false;
-
-		const hiddenTitles = new Set(rec.hiddenItems);
+	/** Separator indices are counted over the shown DOM (groups exist only after show). */
+	private hideSeparators(menuEl: HTMLElement, rec: MenuRecord) {
 		const hiddenSeps = new Set(rec.hiddenSeparators);
-		if (hiddenTitles.size === 0 && hiddenSeps.size === 0) return false;
-
 		const scrollEl = menuEl.querySelector('.menu-scroll') || menuEl;
 
-		type SepTarget = { type: 'dom'; el: HTMLElement } | { type: 'group'; el: HTMLElement };
-		const sepTargets: SepTarget[] = [];
-		let lastWasItem = false;
-
-		const pushSep = (target: SepTarget) => {
-			if (lastWasItem) {
-				sepTargets.push(target);
-				lastWasItem = false;
-			}
-		};
-
-		for (const child of Array.from(scrollEl.children) as HTMLElement[]) {
-			if (child.classList.contains('menu-separator')) {
-				pushSep({ type: 'dom', el: child });
-			} else if (child.classList.contains('menu-group')) {
-				pushSep({ type: 'group', el: child });
-				for (const item of Array.from(child.children) as HTMLElement[]) {
-					if (item.classList.contains('menu-item')) {
-						lastWasItem = true;
-					} else if (item.classList.contains('menu-separator')) {
-						pushSep({ type: 'dom', el: item });
-					}
+		if (hiddenSeps.size > 0) {
+			type SepTarget = { type: 'dom'; el: HTMLElement } | { type: 'group'; el: HTMLElement };
+			const sepTargets: SepTarget[] = [];
+			let lastWasItem = false;
+			const pushSep = (target: SepTarget) => {
+				if (lastWasItem) {
+					sepTargets.push(target);
+					lastWasItem = false;
 				}
-			} else if (child.classList.contains('menu-item')) {
-				lastWasItem = true;
+			};
+			for (const child of Array.from(scrollEl.children) as HTMLElement[]) {
+				if (child.classList.contains('menu-separator')) {
+					pushSep({ type: 'dom', el: child });
+				} else if (child.classList.contains('menu-group')) {
+					pushSep({ type: 'group', el: child });
+					for (const item of Array.from(child.children) as HTMLElement[]) {
+						if (item.classList.contains('menu-item')) lastWasItem = true;
+						else if (item.classList.contains('menu-separator')) pushSep({ type: 'dom', el: item });
+					}
+				} else if (child.classList.contains('menu-item')) {
+					lastWasItem = true;
+				}
 			}
+			sepTargets.forEach((tgt, i) => {
+				if (!hiddenSeps.has(i)) return;
+				if (tgt.type === 'dom') tgt.el.style.display = 'none';
+				else tgt.el.classList.add('menu-hider-no-border');
+			});
 		}
 
-		const allItems = menuEl.querySelectorAll('.menu-item');
-		for (const item of Array.from(allItems)) {
-			const title = item.querySelector('.menu-item-title')?.textContent?.trim();
-			if (title && hiddenTitles.has(title)) {
-				(item as HTMLElement).style.display = 'none';
-			}
-		}
-
-		for (let i = 0; i < sepTargets.length; i++) {
-			if (!hiddenSeps.has(i)) continue;
-			const tgt = sepTargets[i];
-			if (!tgt) continue;
-			if (tgt.type === 'dom') {
-				tgt.el.style.display = 'none';
-			} else {
-				tgt.el.classList.add('menu-hider-no-border');
-			}
-		}
-
-		const groups = scrollEl.querySelectorAll('.menu-group');
-		for (const group of Array.from(groups) as HTMLElement[]) {
-			const visible = group.querySelectorAll('.menu-item:not([style*="display: none"])');
-			if (visible.length === 0) {
+		if (rec.hiddenItems.length === 0) return;
+		for (const group of Array.from(scrollEl.querySelectorAll('.menu-group')) as HTMLElement[]) {
+			if (group.querySelectorAll('.menu-item:not([style*="display: none"])').length === 0) {
 				group.style.display = 'none';
 			}
 		}
-		return true;
 	}
 
-	private applyOrdering(menuEl: HTMLElement, sig: string) {
-		const rec = this.settings.menus[sig];
-		const order = rec?.order;
+	private promotedDoms = new WeakMap<Menu, Array<[item: HTMLElement, parent: HTMLElement]>>();
+
+	/** Clone submenu items into the top-level menu (before show so keyboard nav + sizing include them). */
+	private promoteItems(menu: RtMenu, rec: MenuRecord) {
+		if (!rec.promoted || rec.promoted.length === 0) return;
+		const hidden = new Set(rec.hiddenItems);
+		const placed: Array<[HTMLElement, HTMLElement]> = [];
+		for (const p of rec.promoted) {
+			const parent = menu.items.find(i => i.submenu && this.getMenuItemTitle(i.dom) === p.parent);
+			const child = parent?.submenu?.items.find(i => this.getMenuItemTitle(i.dom) === p.title);
+			if (!parent || !child) continue;
+			child.dom.style.display = 'none';
+			if (hidden.has(p.title)) continue;
+			menu.addItem(it => {
+				it.setTitle(p.title).onClick(() => child.dom.click());
+				const icon = this.detectIconFromDom(child.dom);
+				if (icon) it.setIcon(icon);
+				const dom = (it as unknown as RtMenuItem).dom;
+				dom.classList.add(PROMOTED_CLASS);
+				placed.push([dom, parent.dom]);
+			});
+		}
+		this.promotedDoms.set(menu, placed);
+	}
+
+	/** After show (Obsidian re-sorts DOM by section), park each promoted item right after its parent. */
+	private placePromoted(menu: RtMenu) {
+		for (const [dom, parentDom] of this.promotedDoms.get(menu) ?? []) {
+			parentDom.after(dom);
+		}
+	}
+
+	private applyOrdering(menuEl: HTMLElement, rec: MenuRecord) {
+		const order = rec.order;
 		if (!order || order.length === 0) return;
 
 		const rank = new Map<string, number>();
@@ -560,7 +439,7 @@ export default class MenuHiderPlugin extends Plugin {
 			if (items.length < 2) continue;
 
 			const indexed = items.map((el, origIdx) => {
-				const title = el.querySelector('.menu-item-title')?.textContent?.trim() ?? '';
+				const title = this.getMenuItemTitle(el) ?? '';
 				const r = rank.get(title);
 				return { el, origIdx, rank: r === undefined ? Infinity : r };
 			});
@@ -569,40 +448,12 @@ export default class MenuHiderPlugin extends Plugin {
 				return a.origIdx - b.origIdx;
 			});
 
-			// Only reflow if order actually changed.
-			const changed = sorted.some((s, i) => s.el !== items[i]);
-			if (!changed) continue;
-
-			for (const s of sorted) {
-				container.appendChild(s.el);
-			}
+			if (!sorted.some((s, i) => s.el !== items[i])) continue;
+			for (const s of sorted) container.appendChild(s.el);
 		}
 	}
 
-	private repositionMenu(menuEl: HTMLElement) {
-		const coords = this.pendingCoords;
-		if (!coords || Date.now() > coords.expiresAt) return;
-		// Consume so submenus opened later don't snap back to the cursor.
-		this.pendingCoords = null;
-
-		// Defer one frame so layout reflects the just-applied display:none.
-		requestAnimationFrame(() => {
-			const rect = menuEl.getBoundingClientRect();
-			const vw = window.innerWidth;
-			const vh = window.innerHeight;
-			const margin = 4;
-
-			let x = coords.x;
-			let y = coords.y;
-			if (x + rect.width + margin > vw) x = Math.max(margin, vw - rect.width - margin);
-			if (y + rect.height + margin > vh) y = Math.max(margin, vh - rect.height - margin);
-
-			menuEl.style.left = `${x}px`;
-			menuEl.style.top = `${y}px`;
-			menuEl.style.right = 'auto';
-			menuEl.style.bottom = 'auto';
-		});
-	}
+	// ---------- settings persistence ----------
 
 	async loadSettings() {
 		const data = await this.loadData() as any;
@@ -618,6 +469,8 @@ export default class MenuHiderPlugin extends Plugin {
 					entries: r.entries || [],
 					hiddenItems: r.hiddenItems || [],
 					hiddenSeparators: r.hiddenSeparators || [],
+					order: r.order || [],
+					promoted: r.promoted || [],
 					lastSeenAt: r.lastSeenAt || 0,
 				};
 			}
@@ -666,6 +519,47 @@ export default class MenuHiderPlugin extends Plugin {
 		await this.saveSettings();
 	}
 
+	// ---------- settings-page model ----------
+
+	/** Top-level entries with promoted submenu items inserted after their parent. */
+	effectiveEntries(rec: MenuRecord): CollectedEntry[] {
+		const result: CollectedEntry[] = [...rec.entries];
+		for (const p of rec.promoted ?? []) {
+			const parentIdx = result.findIndex(e => e.type === 'item' && e.title === p.parent);
+			if (parentIdx < 0) continue;
+			const parent = result[parentIdx] as CollectedMenuItem;
+			const child = parent.children?.find(c => c.type === 'item' && c.title === p.title) as CollectedMenuItem | undefined;
+			// Insert after the parent and after any earlier promotions from the same parent.
+			let at = parentIdx + 1;
+			while (at < result.length) {
+				const e = result[at];
+				if (e && e.type === 'item' && e.promotedFrom === p.parent) at++;
+				else break;
+			}
+			result.splice(at, 0, { type: 'item', title: p.title, icon: child?.icon, promotedFrom: p.parent });
+		}
+		return result;
+	}
+
+	isPromoted(rec: MenuRecord, parent: string, title: string): boolean {
+		return (rec.promoted ?? []).some(p => p.parent === parent && p.title === title);
+	}
+
+	async promote(sig: string, ref: PromotedRef) {
+		const rec = this.settings.menus[sig];
+		if (!rec || this.isPromoted(rec, ref.parent, ref.title)) return;
+		(rec.promoted ??= []).push(ref);
+		await this.saveSettings();
+	}
+
+	async demote(sig: string, ref: PromotedRef) {
+		const rec = this.settings.menus[sig];
+		if (!rec) return;
+		rec.promoted = (rec.promoted ?? []).filter(p => !(p.parent === ref.parent && p.title === ref.title));
+		if (rec.order) rec.order = rec.order.filter(tt => tt !== ref.title);
+		await this.saveSettings();
+	}
+
 	/** Sort items within each separator-bounded segment by user-defined rank. */
 	applyOrderToEntries(rec: { order?: string[] }, entries: CollectedEntry[]): CollectedEntry[] {
 		const order = rec.order;
@@ -703,9 +597,9 @@ export default class MenuHiderPlugin extends Plugin {
 	async setOrder(sig: string, titles: string[]) {
 		const rec = this.settings.menus[sig];
 		if (!rec) return;
-		const allTitles = rec.entries
-			.filter(e => e.type === 'item')
-			.map(e => (e as CollectedMenuItem).title);
+		const allTitles = this.effectiveEntries(rec)
+			.filter((e): e is CollectedMenuItem => e.type === 'item')
+			.map(e => e.title);
 		const seen = new Set<string>();
 		const next: string[] = [];
 		for (const tt of titles) {
@@ -718,43 +612,6 @@ export default class MenuHiderPlugin extends Plugin {
 			if (!seen.has(tt)) next.push(tt);
 		}
 		rec.order = next;
-		await this.saveSettings();
-	}
-
-	/**
-	 * Move a top-level item up (-1) or down (+1) within its separator-bounded segment.
-	 * Operates on the flat sequence of top-level items as they appear in entries
-	 * (separators are skipped — items "jump over" separators).
-	 */
-	async moveItem(sig: string, title: string, direction: -1 | 1) {
-		const rec = this.settings.menus[sig];
-		if (!rec) return;
-
-		// Determine neighbor in the currently displayed (ordered) entries, within the same segment.
-		const displayed = this.applyOrderToEntries(rec, rec.entries);
-		const idx = displayed.findIndex(e => e.type === 'item' && (e as CollectedMenuItem).title === title);
-		if (idx < 0) return;
-		const neighborIdx = idx + direction;
-		if (neighborIdx < 0 || neighborIdx >= displayed.length) return;
-		const neighbor = displayed[neighborIdx];
-		if (!neighbor || neighbor.type !== 'item') return;
-		const neighborTitle = (neighbor as CollectedMenuItem).title;
-
-		const allTitles = rec.entries
-			.filter(e => e.type === 'item')
-			.map(e => (e as CollectedMenuItem).title);
-
-		let order = rec.order && rec.order.length > 0 ? [...rec.order] : [...allTitles];
-		for (const tt of allTitles) {
-			if (!order.includes(tt)) order.push(tt);
-		}
-		order = order.filter(tt => allTitles.includes(tt));
-
-		const a = order.indexOf(title);
-		const b = order.indexOf(neighborTitle);
-		if (a < 0 || b < 0) return;
-		[order[a], order[b]] = [order[b]!, order[a]!];
-		rec.order = order;
 		await this.saveSettings();
 	}
 

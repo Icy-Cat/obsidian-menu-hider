@@ -11,7 +11,14 @@ export interface MenuRecord {
 	hiddenSeparators: number[];
 	/** User-defined order of item titles. Items not listed keep their original position. */
 	order?: string[];
+	/** Submenu items lifted into the top-level menu, placed after their parent. */
+	promoted?: PromotedRef[];
 	lastSeenAt: number;
+}
+
+export interface PromotedRef {
+	parent: string;
+	title: string;
 }
 
 export interface MenuHiderSettings {
@@ -118,7 +125,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 				});
 
 				const menuList = containerEl.createDiv({ cls: 'menu-hider-menu-list' });
-				this.renderEntries(menuList, rec, this.plugin.applyOrderToEntries(rec, rec.entries), 0);
+				this.renderEntries(menuList, rec, this.plugin.applyOrderToEntries(rec, this.plugin.effectiveEntries(rec)), 0);
 			}
 		} else {
 			const empty = containerEl.createDiv({ cls: 'menu-hider-empty' });
@@ -128,7 +135,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private renderEntries(containerEl: HTMLElement, rec: MenuRecord, entries: CollectedEntry[], depth: number) {
+	private renderEntries(containerEl: HTMLElement, rec: MenuRecord, entries: CollectedEntry[], depth: number, parentTitle?: string) {
 		const hiddenItems = new Set(rec.hiddenItems);
 		const hiddenSeps = new Set(rec.hiddenSeparators);
 
@@ -178,6 +185,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 				}
 				sepIndex++;
 			} else {
+				if (parentTitle && this.plugin.isPromoted(rec, parentTitle, entry.title)) continue;
 				const isHidden = hiddenItems.has(entry.title);
 				const hasChildren = entry.children && entry.children.length > 0;
 				openSegment();
@@ -186,14 +194,16 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 					cls: `menu-hider-row menu-hider-item-row${isHidden ? ' is-hidden-entry' : ''}${depth > 0 ? ' menu-hider-child' : ''}`,
 				});
 				row.dataset.title = entry.title;
+				if (parentTitle) row.dataset.parent = parentTitle;
+				if (entry.promotedFrom) row.addClass('is-promoted');
 				if (depth > 0) {
 					row.style.paddingLeft = `${6 + depth * 16}px`;
 				}
 
-				if (depth === 0) {
+				if (depth === 0 || parentTitle) {
 					const handle = row.createDiv({
 						cls: 'menu-hider-drag-handle',
-						attr: { 'aria-label': t('drag-to-reorder') },
+						attr: { 'aria-label': t(parentTitle ? 'drag-to-promote' : 'drag-to-reorder') },
 					});
 					setIcon(handle, 'grip-vertical');
 				}
@@ -210,6 +220,17 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 					setIcon(chevron, 'chevron-down');
 				}
 
+				if (entry.promotedFrom) {
+					const from = entry.promotedFrom;
+					const back = row.createDiv({ cls: 'menu-hider-demote', attr: { 'aria-label': t('demote') } });
+					setIcon(back, 'corner-down-left');
+					back.addEventListener('click', async (e) => {
+						e.stopPropagation();
+						await this.plugin.demote(rec.signature, { parent: from, title: entry.title });
+						this.display();
+					});
+				}
+
 				this.addEyeToggle(row, !isHidden, async (visible) => {
 					const list = rec.hiddenItems;
 					if (visible) {
@@ -224,28 +245,50 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 
 				if (hasChildren) {
 					closeSegment();
-					this.renderEntries(containerEl, rec, entry.children!, depth + 1);
+					const childList = containerEl.createDiv({ cls: 'menu-hider-children' });
+					this.renderEntries(childList, rec, entry.children!, depth + 1, entry.title);
+					Sortable.create(childList, {
+						group: { name: 'menu-hider', pull: true, put: false },
+						sort: false,
+						handle: '.menu-hider-drag-handle',
+						animation: 150,
+						ghostClass: 'menu-hider-row-ghost',
+						chosenClass: 'menu-hider-row-chosen',
+						dragClass: 'menu-hider-row-drag',
+					});
 				}
 			}
 		}
 
 		if (depth === 0) {
 			for (const seg of segmentEls) {
+				const readOrder = () => {
+					const newOrder: string[] = [];
+					for (const s of segmentEls) {
+						for (const row of Array.from(s.children) as HTMLElement[]) {
+							const tt = row.dataset.title;
+							if (tt) newOrder.push(tt);
+						}
+					}
+					return newOrder;
+				};
 				Sortable.create(seg, {
+					group: { name: 'menu-hider', put: true },
 					handle: '.menu-hider-drag-handle',
 					animation: 150,
 					ghostClass: 'menu-hider-row-ghost',
 					chosenClass: 'menu-hider-row-chosen',
 					dragClass: 'menu-hider-row-drag',
 					onEnd: async () => {
-						const newOrder: string[] = [];
-						for (const s of segmentEls) {
-							for (const row of Array.from(s.children) as HTMLElement[]) {
-								const tt = row.dataset.title;
-								if (tt) newOrder.push(tt);
-							}
-						}
-						await this.plugin.setOrder(rec.signature, newOrder);
+						await this.plugin.setOrder(rec.signature, readOrder());
+						this.display();
+					},
+					// Dropped in from a submenu list: promote, then persist the resulting order.
+					onAdd: async (evt) => {
+						const { parent, title } = evt.item.dataset;
+						if (!parent || !title) return;
+						await this.plugin.promote(rec.signature, { parent, title });
+						await this.plugin.setOrder(rec.signature, readOrder());
 						this.display();
 					},
 				});

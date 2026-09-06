@@ -303,3 +303,39 @@
 	width: 14px;
 	height: 14px;
 }
+
+/* Submenu item list (Sortable source for promotion) */
+.menu-hider-children {
+	display: flex;
+	flex-direction: column;
+}
+
+/* Promoted (lifted out of a submenu) */
+.menu-hider-row.is-promoted .menu-hider-item-title::after {
+	content: '↑';
+	margin-left: 6px;
+	color: var(--text-faint);
+	font-size: 11px;
+}
+
+.menu-hider-demote {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	flex-shrink: 0;
+	cursor: pointer;
+	color: var(--text-faint);
+	border-radius: 4px;
+}
+
+.menu-hider-demote:hover {
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+
+.menu-hider-demote svg {
+	width: 14px;
+	height: 14px;
+}

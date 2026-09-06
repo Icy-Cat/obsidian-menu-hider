@@ -17,6 +17,8 @@ type TranslationKey =
 	| 'move-down'
 	| 'reset-order'
 	| 'drag-to-reorder'
+	| 'drag-to-promote'
+	| 'demote'
 	| 'notice.passive-hint';
 
 const en: Record<TranslationKey, string> = {
@@ -38,6 +40,8 @@ const en: Record<TranslationKey, string> = {
 	'move-down': 'Move down',
 	'reset-order': 'Reset order',
 	'drag-to-reorder': 'Drag to reorder',
+	'drag-to-promote': 'Drag into the top-level menu',
+	'demote': 'Move back into submenu',
 	'notice.passive-hint': 'Right-click the corresponding element to collect this menu',
 };
 
@@ -60,6 +64,8 @@ const zh: Record<TranslationKey, string> = {
 	'move-down': '下移',
 	'reset-order': '重置排序',
 	'drag-to-reorder': '拖动以排序',
+	'drag-to-promote': '拖到一级菜单',
+	'demote': '放回子菜单',
 	'notice.passive-hint': '请右键对应元素以收集此菜单',
 };
 
@@ -82,6 +88,8 @@ const zhTW: Record<TranslationKey, string> = {
 	'move-down': '下移',
 	'reset-order': '重設排序',
 	'drag-to-reorder': '拖曳以排序',
+	'drag-to-promote': '拖到一級選單',
+	'demote': '放回子選單',
 	'notice.passive-hint': '請右鍵對應元素以收集此選單',
 };
 
