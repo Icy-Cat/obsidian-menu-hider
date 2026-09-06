@@ -19,7 +19,10 @@ type TranslationKey =
 	| 'drag-to-reorder'
 	| 'drag-to-promote'
 	| 'demote'
-	| 'notice.passive-hint';
+	| 'notice.passive-hint'
+	| 'notice.path-copied'
+	| 'setting.copy-path'
+	| 'setting.copy-path-desc';
 
 const en: Record<TranslationKey, string> = {
 	'label.file-menu-file': 'File',
@@ -43,6 +46,9 @@ const en: Record<TranslationKey, string> = {
 	'drag-to-promote': 'Drag into the top-level menu',
 	'demote': 'Move back into submenu',
 	'notice.passive-hint': 'Right-click the corresponding element to collect this menu',
+	'notice.path-copied': 'Path copied',
+	'setting.copy-path': 'Copy absolute path with Ctrl/Cmd+C',
+	'setting.copy-path-desc': 'In the file explorer, press Ctrl/Cmd+C to copy the absolute paths of the selected files to the clipboard.',
 };
 
 const zh: Record<TranslationKey, string> = {
@@ -67,6 +73,9 @@ const zh: Record<TranslationKey, string> = {
 	'drag-to-promote': '拖到一级菜单',
 	'demote': '放回子菜单',
 	'notice.passive-hint': '请右键对应元素以收集此菜单',
+	'notice.path-copied': '已复制路径到剪贴板',
+	'setting.copy-path': 'Ctrl/Cmd+C 复制绝对路径',
+	'setting.copy-path-desc': '在文件列表中选中文件后，按 Ctrl/Cmd+C 将其绝对路径复制到剪贴板。',
 };
 
 const zhTW: Record<TranslationKey, string> = {
@@ -91,18 +100,45 @@ const zhTW: Record<TranslationKey, string> = {
 	'drag-to-promote': '拖到一級選單',
 	'demote': '放回子選單',
 	'notice.passive-hint': '請右鍵對應元素以收集此選單',
-};
-
-const locales: Record<string, Record<TranslationKey, string>> = {
-	en, zh, 'zh-TW': zhTW,
+	'notice.path-copied': '已複製路徑到剪貼簿',
+	'setting.copy-path': 'Ctrl/Cmd+C 複製絕對路徑',
+	'setting.copy-path-desc': '在檔案列表中選取檔案後，按 Ctrl/Cmd+C 將其絕對路徑複製到剪貼簿。',
 };
 
 let currentLocale: Record<TranslationKey, string> = en;
 
+/** Obsidian's UI language: localStorage is the usual source, moment/lang the fallbacks. */
 export function initLocale() {
-	const lang = window.localStorage.getItem('language') || 'en';
-	const base = lang.split('-')[0];
-	currentLocale = locales[lang] || (base ? locales[base] : undefined) || en;
+	const raw = window.localStorage.getItem('language')
+		|| (window as unknown as { moment?: { locale(): string } }).moment?.locale()
+		|| document.documentElement.lang
+		|| navigator.language
+		|| 'en';
+	const lang = raw.toLowerCase();
+	if (lang.startsWith('zh')) {
+		currentLocale = /tw|hk|mo|hant/.test(lang) ? zhTW : zh;
+	} else {
+		currentLocale = en;
+	}
+}
+
+/** Menu labels are persisted in data.json — resolve known signatures live so they follow the UI language. */
+const SIG_LABEL_KEYS: Record<string, TranslationKey> = {
+	'event:file-menu-file': 'label.file-menu-file',
+	'event:file-menu-folder': 'label.file-menu-folder',
+	'event:editor-menu': 'label.editor-menu',
+	'event:files-menu': 'label.files-menu',
+	'event:url-menu': 'label.url-menu',
+	'dom:nav-file': 'label.file-menu-file',
+	'dom:nav-folder': 'label.file-menu-folder',
+	'dom:editor': 'label.editor-menu',
+	'dom:tab-header': 'label.tab-menu',
+	'dom:unknown': 'label.unknown',
+};
+
+export function labelForSig(sig: string, fallback: string): string {
+	const key = SIG_LABEL_KEYS[sig];
+	return key ? t(key) : fallback;
 }
 
 export function t(key: TranslationKey): string {

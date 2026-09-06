@@ -1,7 +1,7 @@
-import { App, Notice, PluginSettingTab, setIcon } from 'obsidian';
+import { App, Notice, PluginSettingTab, Setting, setIcon } from 'obsidian';
 import Sortable from 'sortablejs';
 import MenuHiderPlugin, { CollectedEntry } from './main';
-import { t } from './i18n';
+import { labelForSig, t } from './i18n';
 
 export interface MenuRecord {
 	signature: string;
@@ -23,6 +23,8 @@ export interface PromotedRef {
 
 export interface MenuHiderSettings {
 	menus: Record<string, MenuRecord>;
+	/** Ctrl/Cmd+C in the file explorer copies absolute paths instead of doing nothing. */
+	copyAbsolutePath: boolean;
 }
 
 const TRIGGERABLE_SIGS = new Set([
@@ -48,6 +50,16 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		containerEl.addClass('menu-hider-settings');
 
+		new Setting(containerEl)
+			.setName(t('setting.copy-path'))
+			.setDesc(t('setting.copy-path-desc'))
+			.addToggle(tg => tg
+				.setValue(this.plugin.settings.copyAbsolutePath)
+				.onChange(async v => {
+					this.plugin.settings.copyAbsolutePath = v;
+					await this.plugin.saveSettings();
+				}));
+
 		const sigs = Object.keys(this.plugin.settings.menus).sort((a, b) => {
 			const ra = this.plugin.settings.menus[a];
 			const rb = this.plugin.settings.menus[b];
@@ -68,7 +80,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 				const rec = this.plugin.settings.menus[sig];
 				if (!rec) continue;
 				const tab = tabBar.createEl('button', {
-					text: rec.label || sig,
+					text: labelForSig(sig, rec.label || sig),
 					cls: 'menu-hider-tab',
 					attr: { title: sig },
 				});

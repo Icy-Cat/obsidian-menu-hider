@@ -1,4 +1,4 @@
-import { Menu, Plugin, TFolder, TAbstractFile, MarkdownView } from 'obsidian';
+import { FileSystemAdapter, Menu, Plugin, TFolder, TAbstractFile, MarkdownView } from 'obsidian';
 import { MenuHiderSettings, MenuHiderSettingTab, MenuRecord, PromotedRef } from './settings';
 import { initLocale, t } from './i18n';
 
@@ -89,8 +89,56 @@ export default class MenuHiderPlugin extends Plugin {
 			this.setPending('event:url-menu', t('label.url-menu'), SIG_PRIORITY.urlOverride);
 		}));
 
+		this.registerDomEvent(document, 'keydown', (evt: KeyboardEvent) => this.handleCopyPath(evt), true);
+
 		this.patchMenu();
 		this.addSettingTab(new MenuHiderSettingTab(this.app, this));
+	}
+
+	/** Ctrl/Cmd+C in the file explorer copies the absolute paths of the selected files. */
+	private handleCopyPath(evt: KeyboardEvent) {
+		if (!this.settings.copyAbsolutePath) return;
+		if (evt.key !== 'c' || !(evt.ctrlKey || evt.metaKey) || evt.shiftKey || evt.altKey) return;
+
+		const target = evt.target as HTMLElement | null;
+		const explorer = document.querySelector('.workspace-leaf-content[data-type="file-explorer"]');
+		if (!explorer) return;
+		// Keydown lands on body when the tree item itself isn't focusable.
+		if (target && target !== document.body && !explorer.contains(target)) return;
+
+		const adapter = this.app.vault.adapter;
+		if (!(adapter instanceof FileSystemAdapter)) return;
+
+		const els = Array.from(explorer.querySelectorAll('.is-selected[data-path], .is-active[data-path]')) as HTMLElement[];
+		const paths = [...new Set(els.map(el => el.getAttribute('data-path') || ''))]
+			.filter(Boolean)
+			.map(p => adapter.getFullPath(p));
+		if (paths.length === 0) return;
+
+		evt.preventDefault();
+		evt.stopPropagation();
+		void navigator.clipboard.writeText(paths.join('\n'));
+		this.flashCopied(els);
+	}
+
+	/** Briefly swap each selected file name for the "copied" message, then restore it. */
+	private flashCopied(els: HTMLElement[]) {
+		for (const el of els) {
+			const inner = el.querySelector('.tree-item-inner') as HTMLElement | null;
+			if (!inner || inner.dataset.menuHiderFlash) continue;
+			const original = inner.textContent ?? '';
+			inner.dataset.menuHiderFlash = '1';
+			inner.textContent = t('notice.path-copied');
+			inner.addClass('menu-hider-copied');
+			el.addClass('menu-hider-copied-row');
+			setTimeout(() => {
+				if (!inner.dataset.menuHiderFlash) return;
+				inner.textContent = original;
+				inner.removeClass('menu-hider-copied');
+				el.removeClass('menu-hider-copied-row');
+				delete inner.dataset.menuHiderFlash;
+			}, 1200);
+		}
 	}
 
 	/** Every Menu.show* path ends in showAtPosition — hook it to get the Menu instance. */
@@ -457,7 +505,7 @@ export default class MenuHiderPlugin extends Plugin {
 
 	async loadSettings() {
 		const data = await this.loadData() as any;
-		this.settings = { menus: {} };
+		this.settings = { menus: {}, copyAbsolutePath: data?.copyAbsolutePath ?? false };
 
 		// New-format data
 		if (data && typeof data === 'object' && data.menus && typeof data.menus === 'object') {
