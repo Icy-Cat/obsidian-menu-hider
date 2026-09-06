@@ -72,4 +72,4 @@ Desktop only: absolute paths require a filesystem vault.
 
 ## License
 
-[0BSD](LICENSE)
+[MIT](LICENSE)

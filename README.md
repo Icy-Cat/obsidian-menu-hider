@@ -60,4 +60,4 @@ npm run lint
 
 ## 许可证
 
-[0BSD](LICENSE)
+[MIT](LICENSE)
