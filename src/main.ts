@@ -562,7 +562,11 @@ export default class MenuHiderPlugin extends Plugin {
 
 		// New-format data
 		if (data?.menus) {
-			for (const [sig, r] of Object.entries(data.menus)) {
+			// for..in rather than Object.entries, which needs the ES2017 lib types: a linter
+			// running without them sees an untyped Object.entries and erases `r`.
+			for (const sig in data.menus) {
+				const r = data.menus[sig];
+				if (!r) continue;
 				this.settings.menus[sig] = {
 					signature: sig,
 					label: r.label || sig,
@@ -590,7 +594,9 @@ export default class MenuHiderPlugin extends Plugin {
 			const hiddenItems = data.hiddenItems ?? {};
 			const hiddenSeps = data.hiddenSeparators ?? {};
 			const savedEntries = data.savedEntries ?? {};
-			for (const [legacyKey, m] of Object.entries(legacyMap)) {
+			for (const legacyKey in legacyMap) {
+				const m = legacyMap[legacyKey];
+				if (!m) continue;
 				const items = hiddenItems[legacyKey] ?? [];
 				const seps = hiddenSeps[legacyKey] ?? [];
 				const entries = savedEntries[legacyKey] ?? [];
