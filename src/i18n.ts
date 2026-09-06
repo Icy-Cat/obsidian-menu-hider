@@ -24,7 +24,9 @@ type TranslationKey =
 	| 'notice.passive-hint'
 	| 'notice.path-copied'
 	| 'setting.copy-path'
-	| 'setting.copy-path-desc';
+	| 'setting.copy-path-desc'
+	| 'setting.menus'
+	| 'setting.menus-desc';
 
 const en: Record<TranslationKey, string> = {
 	'label.file-menu-file': 'File',
@@ -51,6 +53,8 @@ const en: Record<TranslationKey, string> = {
 	'notice.path-copied': 'Path copied',
 	'setting.copy-path': 'Copy absolute path with Ctrl/Cmd+C',
 	'setting.copy-path-desc': 'In the file explorer, press Ctrl/Cmd+C to copy the absolute paths of the selected files to the clipboard.',
+	'setting.menus': 'Menus',
+	'setting.menus-desc': 'Right-click anywhere in Obsidian to collect a menu, then hide, reorder or promote its entries.',
 };
 
 const zh: Record<TranslationKey, string> = {
@@ -78,6 +82,8 @@ const zh: Record<TranslationKey, string> = {
 	'notice.path-copied': '已复制路径到剪贴板',
 	'setting.copy-path': 'Ctrl/Cmd+C 复制绝对路径',
 	'setting.copy-path-desc': '在文件列表中选中文件后，按 Ctrl/Cmd+C 将其绝对路径复制到剪贴板。',
+	'setting.menus': '菜单',
+	'setting.menus-desc': '在 Obsidian 中任意位置右键即可收集菜单，然后隐藏、排序或提升其中的条目。',
 };
 
 const zhTW: Record<TranslationKey, string> = {
@@ -105,6 +111,8 @@ const zhTW: Record<TranslationKey, string> = {
 	'notice.path-copied': '已複製路徑到剪貼簿',
 	'setting.copy-path': 'Ctrl/Cmd+C 複製絕對路徑',
 	'setting.copy-path-desc': '在檔案列表中選取檔案後，按 Ctrl/Cmd+C 將其絕對路徑複製到剪貼簿。',
+	'setting.menus': '選單',
+	'setting.menus-desc': '在 Obsidian 中任意位置右鍵即可收集選單，然後隱藏、排序或提升其中的項目。',
 };
 
 let currentLocale: Record<TranslationKey, string> = en;

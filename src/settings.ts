@@ -1,4 +1,4 @@
-import { App, Notice, PluginSettingTab, Setting, setIcon } from 'obsidian';
+import { App, Notice, PluginSettingTab, Setting, SettingDefinitionItem, setIcon } from 'obsidian';
 import Sortable from 'sortablejs';
 import MenuHiderPlugin from './main';
 import { CollectedEntry, MenuRecord } from './types';
@@ -21,12 +21,47 @@ const TRIGGERABLE_SIGS = new Set([
 export class MenuHiderSettingTab extends PluginSettingTab {
 	plugin: MenuHiderPlugin;
 	activeSig: string | null = null;
+	private panelEl: HTMLElement | null = null;
 
 	constructor(app: App, plugin: MenuHiderPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
 
+	/**
+	 * Declarative settings (1.13+): the toggle is indexed by the settings search,
+	 * and the menu editor keeps its own imperative rendering inside a render row.
+	 */
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		return [
+			{
+				name: t('setting.copy-path'),
+				desc: t('setting.copy-path-desc'),
+				control: { type: 'toggle', key: 'copyAbsolutePath' },
+			},
+			{
+				name: t('setting.menus'),
+				desc: t('setting.menus-desc'),
+				render: (setting: Setting) => {
+					setting.settingEl.empty();
+					setting.settingEl.addClasses(['menu-hider-settings', 'menu-hider-panel-row']);
+					this.renderPanel(setting.settingEl.createDiv());
+				},
+			},
+		];
+	}
+
+	getControlValue(key: string): unknown {
+		return key === 'copyAbsolutePath' ? this.plugin.settings.copyAbsolutePath : undefined;
+	}
+
+	async setControlValue(key: string, value: unknown): Promise<void> {
+		if (key !== 'copyAbsolutePath') return;
+		this.plugin.settings.copyAbsolutePath = value === true;
+		await this.plugin.saveSettings();
+	}
+
+	/** Imperative fallback for Obsidian versions before 1.13. */
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
@@ -37,10 +72,22 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 			.setDesc(t('setting.copy-path-desc'))
 			.addToggle(tg => tg
 				.setValue(this.plugin.settings.copyAbsolutePath)
-				.onChange(async v => {
+				.onChange(voidHandler(async (v: boolean) => {
 					this.plugin.settings.copyAbsolutePath = v;
 					await this.plugin.saveSettings();
-				}));
+				})));
+
+		this.renderPanel(containerEl.createDiv());
+	}
+
+	/** Re-render the menu editor wherever it currently lives (declarative row or legacy tab). */
+	private refresh(): void {
+		if (this.panelEl) this.renderPanel(this.panelEl);
+	}
+
+	private renderPanel(containerEl: HTMLElement): void {
+		this.panelEl = containerEl;
+		containerEl.empty();
 
 		const sigs = Object.keys(this.plugin.settings.menus).sort((a, b) => {
 			const ra = this.plugin.settings.menus[a];
@@ -69,7 +116,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 				if (sig === this.activeSig) tab.addClass('is-active');
 				tab.addEventListener('click', () => {
 					this.activeSig = sig;
-					this.display();
+					this.refresh();
 				});
 			}
 		}
@@ -87,7 +134,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 				const ok = await this.plugin.triggerCollect(this.activeSig);
 				refreshBtn.disabled = false;
 				refreshBtn.removeClass('is-spinning');
-				if (ok) this.display();
+				if (ok) this.refresh();
 				else new Notice(t('notice.passive-hint'));
 			}));
 		}
@@ -104,7 +151,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 					});
 					resetBtn.addEventListener('click', voidHandler(async () => {
 						await this.plugin.resetOrder(rec.signature);
-						this.display();
+						this.refresh();
 					}));
 				}
 				const delBtn = meta.createEl('button', {
@@ -115,7 +162,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 				delBtn.addEventListener('click', voidHandler(async () => {
 					await this.plugin.deleteMenu(rec.signature);
 					this.activeSig = null;
-					this.display();
+					this.refresh();
 				}));
 
 				const menuList = containerEl.createDiv({ cls: 'menu-hider-menu-list' });
@@ -174,7 +221,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 							if (!list.includes(idx)) list.push(idx);
 						}
 						await this.plugin.saveSettings();
-						this.display();
+						this.refresh();
 					});
 				}
 				sepIndex++;
@@ -221,7 +268,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 					back.addEventListener('click', voidHandler(async (e: MouseEvent) => {
 						e.stopPropagation();
 						await this.plugin.demote(rec.signature, { parent: from, title: entry.title });
-						this.display();
+						this.refresh();
 					}));
 				}
 
@@ -234,7 +281,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 						if (!list.includes(entry.title)) list.push(entry.title);
 					}
 					await this.plugin.saveSettings();
-					this.display();
+					this.refresh();
 				});
 
 				if (hasChildren) {
@@ -275,7 +322,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 					dragClass: 'menu-hider-row-drag',
 					onEnd: voidHandler(async () => {
 						await this.plugin.setOrder(rec.signature, readOrder());
-						this.display();
+						this.refresh();
 					}),
 					// Dropped in from a submenu list: promote, then persist the resulting order.
 					onAdd: voidHandler(async (evt: Sortable.SortableEvent) => {
@@ -283,7 +330,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 						if (!parent || !title) return;
 						await this.plugin.promote(rec.signature, { parent, title });
 						await this.plugin.setOrder(rec.signature, readOrder());
-						this.display();
+						this.refresh();
 					}),
 				});
 			}

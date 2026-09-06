@@ -382,3 +382,10 @@
 	left: -9999px;
 	opacity: 0;
 }
+
+/* Declarative settings (1.13+): the menu editor occupies a full-width render row. */
+.menu-hider-panel-row {
+	display: block;
+	padding: 0;
+	border-top: none;
+}
