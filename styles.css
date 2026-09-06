@@ -370,3 +370,15 @@
 		animation: none;
 	}
 }
+
+/* Runtime menu tweaks: applied to Obsidian's live menu DOM. */
+.menu .menu-hider-hidden {
+	display: none;
+}
+
+.menu.menu-hider-offscreen {
+	position: fixed;
+	top: -9999px;
+	left: -9999px;
+	opacity: 0;
+}

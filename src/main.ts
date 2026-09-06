@@ -1,4 +1,4 @@
-import { FileSystemAdapter, Menu, Plugin, TFolder, TAbstractFile, MarkdownView } from 'obsidian';
+import { FileSystemAdapter, Menu, Plugin, TFolder, TAbstractFile, MarkdownView, WorkspaceLeaf } from 'obsidian';
 import { MenuHiderSettings, MenuHiderSettingTab, MenuRecord, PromotedRef } from './settings';
 import { initLocale, t } from './i18n';
 
@@ -16,6 +16,15 @@ export interface CollectedSeparator {
 }
 
 export type CollectedEntry = CollectedMenuItem | CollectedSeparator;
+
+/** Shape of data.json: the current format plus the pre-signature legacy keys. */
+interface PersistedData {
+	menus?: Record<string, Partial<MenuRecord>>;
+	copyAbsolutePath?: boolean;
+	hiddenItems?: Record<string, string[]>;
+	hiddenSeparators?: Record<string, number[]>;
+	savedEntries?: Record<string, CollectedEntry[]>;
+}
 
 interface PendingSig {
 	sig: string;
@@ -42,6 +51,13 @@ interface RtMenu extends Menu {
 }
 
 const PROMOTED_CLASS = 'menu-hider-promoted';
+const HIDDEN_CLASS = 'menu-hider-hidden';
+const OFFSCREEN_CLASS = 'menu-hider-offscreen';
+
+/** View.containerEl is public at runtime but not on the typed View interface. */
+function viewContainer(leaf: WorkspaceLeaf | undefined): HTMLElement | undefined {
+	return (leaf?.view as { containerEl?: HTMLElement } | undefined)?.containerEl;
+}
 
 export default class MenuHiderPlugin extends Plugin {
 	settings: MenuHiderSettings;
@@ -109,7 +125,7 @@ export default class MenuHiderPlugin extends Plugin {
 		const adapter = this.app.vault.adapter;
 		if (!(adapter instanceof FileSystemAdapter)) return;
 
-		const els = Array.from(explorer.querySelectorAll('.is-selected[data-path], .is-active[data-path]')) as HTMLElement[];
+		const els = Array.from(explorer.querySelectorAll<HTMLElement>('.is-selected[data-path], .is-active[data-path]'));
 		const paths = [...new Set(els.map(el => el.getAttribute('data-path') || ''))]
 			.filter(Boolean)
 			.map(p => adapter.getFullPath(p));
@@ -124,7 +140,7 @@ export default class MenuHiderPlugin extends Plugin {
 	/** Briefly swap each selected file name for the "copied" message, then restore it. */
 	private flashCopied(els: HTMLElement[]) {
 		for (const el of els) {
-			const inner = el.querySelector('.tree-item-inner') as HTMLElement | null;
+			const inner = el.querySelector<HTMLElement>('.tree-item-inner');
 			if (!inner || inner.dataset.menuHiderFlash) continue;
 			const original = inner.textContent ?? '';
 			inner.dataset.menuHiderFlash = '1';
@@ -145,11 +161,12 @@ export default class MenuHiderPlugin extends Plugin {
 	private patchMenu() {
 		const proto = Menu.prototype as unknown as { showAtPosition: (...args: unknown[]) => Menu };
 		const orig = proto.showAtPosition;
-		const self = this;
+		const before = (menu: RtMenu) => this.beforeShow(menu);
+		const after = (menu: RtMenu) => this.afterShow(menu);
 		proto.showAtPosition = function (this: RtMenu, ...args: unknown[]) {
-			try { self.beforeShow(this); } catch (e) { console.error('[menu-hider] beforeShow', e); }
+			try { before(this); } catch (e) { console.error('[menu-hider] beforeShow', e); }
 			const result = orig.apply(this, args);
-			try { self.afterShow(this); } catch (e) { console.error('[menu-hider] afterShow', e); }
+			try { after(this); } catch (e) { console.error('[menu-hider] afterShow', e); }
 			return result;
 		};
 		this.register(() => { proto.showAtPosition = orig; });
@@ -198,7 +215,7 @@ export default class MenuHiderPlugin extends Plugin {
 		}
 		if (isTop) this.collectIntoRegistry(menu, meta);
 		if (this.collectMode) {
-			menu.dom.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
+			menu.dom.addClass(OFFSCREEN_CLASS);
 		}
 	}
 
@@ -227,7 +244,7 @@ export default class MenuHiderPlugin extends Plugin {
 		for (const k of known) {
 			if (target.closest(k.selector)) return { sig: k.sig, label: t(k.labelKey) };
 		}
-		const leaf = target.closest('[data-type]') as HTMLElement | null;
+		const leaf = target.closest<HTMLElement>('[data-type]');
 		if (leaf) {
 			const dt = leaf.getAttribute('data-type');
 			if (dt) return { sig: `view:${dt}`, label: dt };
@@ -340,15 +357,13 @@ export default class MenuHiderPlugin extends Plugin {
 			case 'event:file-menu-folder':
 			case 'dom:nav-folder': {
 				const leaves = this.app.workspace.getLeavesOfType('file-explorer');
-				const containerEl = (leaves[0]?.view as any)?.containerEl as HTMLElement | undefined;
-				targetEl = containerEl?.querySelector('.nav-folder-title') ?? null;
+				targetEl = viewContainer(leaves[0])?.querySelector('.nav-folder-title') ?? null;
 				break;
 			}
 			case 'event:file-menu-file':
 			case 'dom:nav-file': {
 				const leaves = this.app.workspace.getLeavesOfType('file-explorer');
-				const containerEl = (leaves[0]?.view as any)?.containerEl as HTMLElement | undefined;
-				targetEl = containerEl?.querySelector('.nav-file-title') ?? null;
+				targetEl = viewContainer(leaves[0])?.querySelector('.nav-file-title') ?? null;
 				break;
 			}
 			case 'event:editor-menu':
@@ -390,7 +405,7 @@ export default class MenuHiderPlugin extends Plugin {
 		const hidden = new Set(rec.hiddenItems);
 		for (const item of menu.items) {
 			const title = this.getMenuItemTitle(item.dom);
-			if (title && hidden.has(title)) item.dom.style.display = 'none';
+			if (title && hidden.has(title)) item.dom.addClass(HIDDEN_CLASS);
 		}
 	}
 
@@ -424,15 +439,15 @@ export default class MenuHiderPlugin extends Plugin {
 			}
 			sepTargets.forEach((tgt, i) => {
 				if (!hiddenSeps.has(i)) return;
-				if (tgt.type === 'dom') tgt.el.style.display = 'none';
+				if (tgt.type === 'dom') tgt.el.addClass(HIDDEN_CLASS);
 				else tgt.el.classList.add('menu-hider-no-border');
 			});
 		}
 
 		if (rec.hiddenItems.length === 0) return;
-		for (const group of Array.from(scrollEl.querySelectorAll('.menu-group')) as HTMLElement[]) {
-			if (group.querySelectorAll('.menu-item:not([style*="display: none"])').length === 0) {
-				group.style.display = 'none';
+		for (const group of Array.from(scrollEl.querySelectorAll<HTMLElement>('.menu-group'))) {
+			if (group.querySelectorAll(`.menu-item:not(.${HIDDEN_CLASS})`).length === 0) {
+				group.addClass(HIDDEN_CLASS);
 			}
 		}
 	}
@@ -448,7 +463,7 @@ export default class MenuHiderPlugin extends Plugin {
 			const parent = menu.items.find(i => i.submenu && this.getMenuItemTitle(i.dom) === p.parent);
 			const child = parent?.submenu?.items.find(i => this.getMenuItemTitle(i.dom) === p.title);
 			if (!parent || !child) continue;
-			child.dom.style.display = 'none';
+			child.dom.addClass(HIDDEN_CLASS);
 			if (hidden.has(p.title)) continue;
 			menu.addItem(it => {
 				it.setTitle(p.title).onClick(() => child.dom.click());
@@ -476,9 +491,9 @@ export default class MenuHiderPlugin extends Plugin {
 		const rank = new Map<string, number>();
 		order.forEach((title, i) => rank.set(title, i));
 
-		const scrollEl = (menuEl.querySelector('.menu-scroll') || menuEl) as HTMLElement;
+		const scrollEl = menuEl.querySelector<HTMLElement>('.menu-scroll') ?? menuEl;
 		// Reorder within each container (groups + scroll root) to preserve grouping.
-		const containers: HTMLElement[] = [scrollEl, ...Array.from(scrollEl.querySelectorAll('.menu-group')) as HTMLElement[]];
+		const containers: HTMLElement[] = [scrollEl, ...Array.from(scrollEl.querySelectorAll<HTMLElement>('.menu-group'))];
 
 		for (const container of containers) {
 			const items = Array.from(container.children).filter(
@@ -504,13 +519,12 @@ export default class MenuHiderPlugin extends Plugin {
 	// ---------- settings persistence ----------
 
 	async loadSettings() {
-		const data = await this.loadData() as any;
+		const data = await this.loadData() as PersistedData | null;
 		this.settings = { menus: {}, copyAbsolutePath: data?.copyAbsolutePath ?? false };
 
 		// New-format data
-		if (data && typeof data === 'object' && data.menus && typeof data.menus === 'object') {
-			for (const [sig, rec] of Object.entries(data.menus)) {
-				const r = rec as Partial<MenuRecord>;
+		if (data?.menus) {
+			for (const [sig, r] of Object.entries(data.menus)) {
 				this.settings.menus[sig] = {
 					signature: sig,
 					label: r.label || sig,
@@ -526,7 +540,7 @@ export default class MenuHiderPlugin extends Plugin {
 		}
 
 		// Legacy migration
-		if (data && typeof data === 'object') {
+		if (data) {
 			const legacyMap: Record<string, { sig: string; labelKey: 'label.file-menu-file' | 'label.file-menu-folder' | 'label.editor-menu' | 'label.tab-menu' | 'label.files-menu' | 'label.url-menu' }> = {
 				'file-menu-file': { sig: 'event:file-menu-file', labelKey: 'label.file-menu-file' },
 				'file-menu-folder': { sig: 'event:file-menu-folder', labelKey: 'label.file-menu-folder' },
@@ -535,13 +549,13 @@ export default class MenuHiderPlugin extends Plugin {
 				'files-menu': { sig: 'event:files-menu', labelKey: 'label.files-menu' },
 				'url-menu': { sig: 'event:url-menu', labelKey: 'label.url-menu' },
 			};
-			const hiddenItems = data.hiddenItems || {};
-			const hiddenSeps = data.hiddenSeparators || {};
-			const savedEntries = data.savedEntries || {};
+			const hiddenItems = data.hiddenItems ?? {};
+			const hiddenSeps = data.hiddenSeparators ?? {};
+			const savedEntries = data.savedEntries ?? {};
 			for (const [legacyKey, m] of Object.entries(legacyMap)) {
-				const items = hiddenItems[legacyKey] || [];
-				const seps = hiddenSeps[legacyKey] || [];
-				const entries = savedEntries[legacyKey] || [];
+				const items = hiddenItems[legacyKey] ?? [];
+				const seps = hiddenSeps[legacyKey] ?? [];
+				const entries = savedEntries[legacyKey] ?? [];
 				if (items.length === 0 && seps.length === 0 && entries.length === 0) continue;
 				this.settings.menus[m.sig] = {
 					signature: m.sig,

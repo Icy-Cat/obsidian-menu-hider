@@ -3,7 +3,7 @@
 	"name": "Menu Hider",
 	"version": "1.0.0",
 	"minAppVersion": "0.15.0",
-	"description": "Inspect and hide context menu items by menu type",
+	"description": "Hide, reorder and promote context menu entries, and copy absolute file paths from the file explorer.",
 	"author": "Icy-Cat",
 	"authorUrl": "https://github.com/Icy-Cat",
 	"isDesktopOnly": true

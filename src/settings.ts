@@ -27,6 +27,11 @@ export interface MenuHiderSettings {
 	copyAbsolutePath: boolean;
 }
 
+/** DOM/Sortable callbacks must return void, not a promise. */
+function voidHandler<A extends unknown[]>(fn: (...args: A) => Promise<void>): (...args: A) => void {
+	return (...args: A) => { void fn(...args); };
+}
+
 const TRIGGERABLE_SIGS = new Set([
 	'event:file-menu-file',
 	'event:file-menu-folder',
@@ -98,7 +103,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 				attr: { 'aria-label': t('refresh') },
 			});
 			setIcon(refreshBtn, 'refresh-cw');
-			refreshBtn.addEventListener('click', async () => {
+			refreshBtn.addEventListener('click', voidHandler(async () => {
 				if (!this.activeSig) return;
 				refreshBtn.disabled = true;
 				refreshBtn.addClass('is-spinning');
@@ -107,7 +112,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 				refreshBtn.removeClass('is-spinning');
 				if (ok) this.display();
 				else new Notice(t('notice.passive-hint'));
-			});
+			}));
 		}
 
 		if (this.activeSig) {
@@ -120,21 +125,21 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 						cls: 'menu-hider-delete-btn',
 						text: t('reset-order'),
 					});
-					resetBtn.addEventListener('click', async () => {
+					resetBtn.addEventListener('click', voidHandler(async () => {
 						await this.plugin.resetOrder(rec.signature);
 						this.display();
-					});
+					}));
 				}
 				const delBtn = meta.createEl('button', {
 					cls: 'menu-hider-delete-btn',
 					attr: { 'aria-label': t('delete') },
 					text: t('delete'),
 				});
-				delBtn.addEventListener('click', async () => {
+				delBtn.addEventListener('click', voidHandler(async () => {
 					await this.plugin.deleteMenu(rec.signature);
 					this.activeSig = null;
 					this.display();
-				});
+				}));
 
 				const menuList = containerEl.createDiv({ cls: 'menu-hider-menu-list' });
 				this.renderEntries(menuList, rec, this.plugin.applyOrderToEntries(rec, this.plugin.effectiveEntries(rec)), 0);
@@ -236,11 +241,11 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 					const from = entry.promotedFrom;
 					const back = row.createDiv({ cls: 'menu-hider-demote', attr: { 'aria-label': t('demote') } });
 					setIcon(back, 'corner-down-left');
-					back.addEventListener('click', async (e) => {
+					back.addEventListener('click', voidHandler(async (e: MouseEvent) => {
 						e.stopPropagation();
 						await this.plugin.demote(rec.signature, { parent: from, title: entry.title });
 						this.display();
-					});
+					}));
 				}
 
 				this.addEyeToggle(row, !isHidden, async (visible) => {
@@ -291,24 +296,24 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 					ghostClass: 'menu-hider-row-ghost',
 					chosenClass: 'menu-hider-row-chosen',
 					dragClass: 'menu-hider-row-drag',
-					onEnd: async () => {
+					onEnd: voidHandler(async () => {
 						await this.plugin.setOrder(rec.signature, readOrder());
 						this.display();
-					},
+					}),
 					// Dropped in from a submenu list: promote, then persist the resulting order.
-					onAdd: async (evt) => {
+					onAdd: voidHandler(async (evt: Sortable.SortableEvent) => {
 						const { parent, title } = evt.item.dataset;
 						if (!parent || !title) return;
 						await this.plugin.promote(rec.signature, { parent, title });
 						await this.plugin.setOrder(rec.signature, readOrder());
 						this.display();
-					},
+					}),
 				});
 			}
 		}
 	}
 
-	private addEyeToggle(parent: HTMLElement, visible: boolean, onChange: (visible: boolean) => void) {
+	private addEyeToggle(parent: HTMLElement, visible: boolean, onChange: (visible: boolean) => void | Promise<void>) {
 		const btn = parent.createDiv({
 			cls: `menu-hider-eye${visible ? '' : ' is-off'}`,
 			attr: { 'aria-label': visible ? t('eye.hide') : t('eye.show') },
@@ -316,7 +321,7 @@ export class MenuHiderSettingTab extends PluginSettingTab {
 		setIcon(btn, visible ? 'eye' : 'eye-off');
 		btn.addEventListener('click', (e) => {
 			e.stopPropagation();
-			onChange(!visible);
+			void onChange(!visible);
 		});
 	}
 }
