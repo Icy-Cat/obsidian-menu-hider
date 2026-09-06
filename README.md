@@ -2,8 +2,10 @@
 
 **English** | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md)
 
-Trim Obsidian's context menus down to what you actually use: hide entries and
-separators, reorder them, and pull a submenu entry up into the top level.
+Menu Hider works on the menu itself, not on commands. It reads the entries of
+whatever context menu you open — including ones no command registers, in menus
+other plugins never touch — so it can hide, reorder, and lift them out of
+submenus.
 
 ## Features
 
@@ -51,6 +53,33 @@ Consequences worth knowing:
 
 Entries are matched by their visible title, so a menu entry that changes its
 label (localization, a plugin update) needs to be hidden again.
+
+## Compared to Commander
+
+[Commander](https://github.com/phibr0/obsidian-commander) can hide menu entries
+too, and if that's all you need it's the safer bet — it does a dozen other
+things and it's what most vaults already have installed.
+
+The difference is what each plugin can see. Commander matches registered
+commands in two hardcoded scopes (`editor-menu` and `file-menu`); entries that
+aren't commands, and every other menu, are out of its reach. Menu Hider reads
+the menu that actually opened, whatever it is.
+
+|                          | Commander                      | Menu Hider                          |
+| ------------------------ | ------------------------------ | ----------------------------------- |
+| Menus covered            | editor + file, hardcoded       | any menu, discovered on right-click |
+| Granularity              | one list per scope             | per menu                            |
+| Matching                 | exact / regex                  | exact title                         |
+| Reordering               | its own commands               | any entry                           |
+| Promote out of a submenu | —                              | yes                                 |
+| Native menus             | supported                      | hiding only (see below)             |
+
+## Native menus
+
+With **Appearance → Native menus** enabled, context menus are drawn by the OS
+and there is no menu DOM to work with. Hiding still applies — entries are
+dropped before the menu is built — but reordering and promotion don't, because
+both need the rendered menu. Turn native menus off to use them.
 
 ## Installation
 

@@ -1,4 +1,4 @@
-import { FileSystemAdapter, Menu, Plugin, TFolder, TAbstractFile, MarkdownView, WorkspaceLeaf } from 'obsidian';
+import { FileSystemAdapter, Menu, MenuItem, Plugin, TFolder, TAbstractFile, MarkdownView, WorkspaceLeaf } from 'obsidian';
 import { MenuHiderSettingTab } from './settings';
 import { CollectedEntry, CollectedMenuItem, MenuHiderSettings, MenuRecord, PersistedData, PromotedRef } from './types';
 import { initLocale, t } from './i18n';
@@ -20,6 +20,8 @@ interface RtMenuItem {
 	dom: HTMLElement;
 	titleEl?: HTMLElement;
 	submenu?: RtMenu;
+	/** Stamped by our setTitle patch: the only title source when menus render natively. */
+	menuHiderTitle?: string;
 }
 interface RtMenu extends Menu {
 	dom: HTMLElement;
@@ -45,6 +47,7 @@ export default class MenuHiderPlugin extends Plugin {
 	private pendingExpiresAt = 0;
 	private forcedSig: string | null = null;
 	private collectMode = false;
+	private nativeMenusSeen = false;
 
 	async onload() {
 		await this.loadSettings();
@@ -84,6 +87,7 @@ export default class MenuHiderPlugin extends Plugin {
 
 		this.registerDomEvent(document, 'keydown', (evt: KeyboardEvent) => this.handleCopyPath(evt), true);
 
+		this.patchMenuItem();
 		this.patchMenu();
 		this.addSettingTab(new MenuHiderSettingTab(this.app, this));
 	}
@@ -134,6 +138,36 @@ export default class MenuHiderPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Native menus are drawn by the OS, so there is no menu DOM to restyle — entries
+	 * have to be dropped from `menu.items` instead. The Appearance setting is the
+	 * primary signal; a menu that shows without ever entering the document corrects it.
+	 */
+	private nativeMenus(): boolean {
+		if (this.nativeMenusSeen) return true;
+		const cfg = (this.app.vault as unknown as { getConfig?(key: string): unknown }).getConfig?.('nativeMenus');
+		return cfg === true;
+	}
+
+	/** Titles come from the DOM normally, and from the setTitle stamp under native menus. */
+	private titleOf(item: RtMenuItem): string | null {
+		return item.menuHiderTitle
+			?? this.getMenuItemTitle(item.dom)
+			?? item.titleEl?.textContent?.trim()
+			?? null;
+	}
+
+	/** MenuItem.setTitle is the only place a title is guaranteed to pass through. */
+	private patchMenuItem() {
+		const proto = MenuItem.prototype as unknown as { setTitle: (title: string | DocumentFragment) => MenuItem };
+		const orig = proto.setTitle;
+		proto.setTitle = function (this: RtMenuItem, title: string | DocumentFragment) {
+			this.menuHiderTitle = (typeof title === 'string' ? title : title.textContent ?? '').trim() || undefined;
+			return orig.call(this, title);
+		};
+		this.register(() => { proto.setTitle = orig; });
+	}
+
 	/** Every Menu.show* path ends in showAtPosition — hook it to get the Menu instance. */
 	private patchMenu() {
 		const proto = Menu.prototype as unknown as { showAtPosition: (...args: unknown[]) => Menu };
@@ -179,6 +213,7 @@ export default class MenuHiderPlugin extends Plugin {
 	}
 
 	private afterShow(menu: RtMenu) {
+		if (!this.nativeMenusSeen && !menu.dom?.isConnected) this.nativeMenusSeen = true;
 		const meta = this.menuMeta.get(menu);
 		if (!meta) return;
 		const rec = this.settings.menus[meta.sig];
@@ -243,7 +278,7 @@ export default class MenuHiderPlugin extends Plugin {
 		// Submenu items exist before the submenu is ever shown — read them directly.
 		for (const item of menu.items) {
 			if (!item.submenu) continue;
-			const title = this.getMenuItemTitle(item.dom);
+			const title = this.titleOf(item);
 			const entry = entries.find(e => e.type === 'item' && e.title === title);
 			if (entry && entry.type === 'item') entry.children = this.readEntriesFromDom(item.submenu.dom);
 		}
@@ -380,9 +415,34 @@ export default class MenuHiderPlugin extends Plugin {
 	private hideItems(menu: RtMenu, rec: MenuRecord) {
 		if (rec.hiddenItems.length === 0) return;
 		const hidden = new Set(rec.hiddenItems);
+
+		if (this.nativeMenus()) {
+			for (let i = menu.items.length - 1; i >= 0; i--) {
+				const item = menu.items[i];
+				if (!item) continue;
+				const title = this.titleOf(item);
+				if (title && hidden.has(title)) menu.items.splice(i, 1);
+			}
+			this.collapseSeparators(menu);
+			return;
+		}
+
 		for (const item of menu.items) {
-			const title = this.getMenuItemTitle(item.dom);
+			const title = this.titleOf(item);
 			if (title && hidden.has(title)) item.dom.addClass(HIDDEN_CLASS);
+		}
+	}
+
+	/** After splicing: drop separators left leading, trailing, or doubled up. */
+	private collapseSeparators(menu: RtMenu) {
+		// Separators are not MenuItems — they carry no setTitle.
+		const isSeparator = (item: RtMenuItem | undefined) =>
+			!!item && typeof (item as unknown as { setTitle?: unknown }).setTitle !== 'function';
+		for (let i = menu.items.length - 1; i >= 0; i--) {
+			if (!isSeparator(menu.items[i])) continue;
+			if (i === 0 || i === menu.items.length - 1 || isSeparator(menu.items[i - 1])) {
+				menu.items.splice(i, 1);
+			}
 		}
 	}
 
@@ -437,8 +497,8 @@ export default class MenuHiderPlugin extends Plugin {
 		const hidden = new Set(rec.hiddenItems);
 		const placed: Array<[HTMLElement, HTMLElement]> = [];
 		for (const p of rec.promoted) {
-			const parent = menu.items.find(i => i.submenu && this.getMenuItemTitle(i.dom) === p.parent);
-			const child = parent?.submenu?.items.find(i => this.getMenuItemTitle(i.dom) === p.title);
+			const parent = menu.items.find(i => i.submenu && this.titleOf(i) === p.parent);
+			const child = parent?.submenu?.items.find(i => this.titleOf(i) === p.title);
 			if (!parent || !child) continue;
 			child.dom.addClass(HIDDEN_CLASS);
 			if (hidden.has(p.title)) continue;
