@@ -140,11 +140,12 @@
 }
 
 /* Runtime: collapse group border when separator is hidden */
-.menu-hider-no-border {
-	border-top: none !important;
-	margin-top: 0 !important;
-	padding-top: 0 !important;
-	box-shadow: none !important;
+.menu .menu-scroll .menu-group.menu-hider-no-border,
+.menu .menu-group.menu-hider-no-border {
+	border-top: none;
+	margin-top: 0;
+	padding-top: 0;
+	box-shadow: none;
 }
 
 /* Hidden entry */
@@ -155,7 +156,6 @@
 
 .menu-hider-row.is-hidden-entry .menu-hider-item-title {
 	text-decoration: line-through;
-	text-decoration-color: var(--text-faint);
 }
 
 /* Item row */
@@ -261,9 +261,9 @@
 }
 
 /* Sortable states */
-.menu-hider-row-ghost {
+.menu-hider-menu-list .menu-hider-row.menu-hider-row-ghost {
 	opacity: 0.35;
-	background: var(--background-modifier-hover) !important;
+	background: var(--background-modifier-hover);
 }
 
 .menu-hider-row-chosen {

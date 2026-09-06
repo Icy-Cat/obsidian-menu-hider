@@ -1,3 +1,5 @@
+import { getLanguage } from 'obsidian';
+
 type TranslationKey =
 	| 'label.file-menu-file'
 	| 'label.file-menu-folder'
@@ -107,14 +109,9 @@ const zhTW: Record<TranslationKey, string> = {
 
 let currentLocale: Record<TranslationKey, string> = en;
 
-/** Obsidian's UI language: localStorage is the usual source, moment/lang the fallbacks. */
+/** Follow the app language; getLanguage() returns an ISO code such as 'en' or 'zh'. */
 export function initLocale() {
-	const raw = window.localStorage.getItem('language')
-		|| (window as unknown as { moment?: { locale(): string } }).moment?.locale()
-		|| document.documentElement.lang
-		|| navigator.language
-		|| 'en';
-	const lang = raw.toLowerCase();
+	const lang = getLanguage().toLowerCase();
 	if (lang.startsWith('zh')) {
 		currentLocale = /tw|hk|mo|hant/.test(lang) ? zhTW : zh;
 	} else {

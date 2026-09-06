@@ -147,7 +147,7 @@ export default class MenuHiderPlugin extends Plugin {
 			inner.textContent = t('notice.path-copied');
 			inner.addClass('menu-hider-copied');
 			el.addClass('menu-hider-copied-row');
-			setTimeout(() => {
+			window.setTimeout(() => {
 				if (!inner.dataset.menuHiderFlash) return;
 				inner.textContent = original;
 				inner.removeClass('menu-hider-copied');
@@ -389,7 +389,7 @@ export default class MenuHiderPlugin extends Plugin {
 			clientY: rect.top + Math.min(rect.height / 2, 10),
 		}));
 
-		await new Promise<void>(r => setTimeout(r, 200));
+		await new Promise<void>(r => window.setTimeout(r, 200));
 		this.lastTopMenu?.hide();
 		document.querySelectorAll('.menu').forEach(m => m.remove());
 		this.forcedSig = null;
@@ -497,7 +497,7 @@ export default class MenuHiderPlugin extends Plugin {
 
 		for (const container of containers) {
 			const items = Array.from(container.children).filter(
-				(c): c is HTMLElement => c instanceof HTMLElement && c.classList.contains('menu-item'),
+				(c): c is HTMLElement => c.instanceOf(HTMLElement) && c.classList.contains('menu-item'),
 			);
 			if (items.length < 2) continue;
 
@@ -519,7 +519,8 @@ export default class MenuHiderPlugin extends Plugin {
 	// ---------- settings persistence ----------
 
 	async loadSettings() {
-		const data = await this.loadData() as PersistedData | null;
+		const loaded: unknown = await this.loadData();
+		const data: PersistedData | null = (loaded && typeof loaded === 'object') ? loaded as PersistedData : null;
 		this.settings = { menus: {}, copyAbsolutePath: data?.copyAbsolutePath ?? false };
 
 		// New-format data
