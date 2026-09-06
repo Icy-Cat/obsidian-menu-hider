@@ -1,63 +1,75 @@
 # Menu Hider
 
-[English](README.en.md) | **简体中文** | [繁體中文](README.zh-TW.md)
+**English** | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md)
 
-把 Obsidian 的右键菜单裁剪成你真正要用的样子：隐藏条目和分隔线、调整顺序、
-把子菜单里的条目提升到一级菜单。
+Trim Obsidian's context menus down to what you actually use: hide entries and
+separators, reorder them, and pull a submenu entry up into the top level.
 
-## 功能
+## Features
 
-- **自动发现** —— 在任意位置右键，你打开的那个菜单就会作为独立标签页出现在设置里，
-  条目和图标一并收集。没有任何硬编码，其他插件添加的菜单项同样能识别。
-- **隐藏条目和分隔线** —— 点击行尾的眼睛图标。整组被隐光后，该组连同分隔线一起消失。
-- **排序** —— 在同一段（两条分隔线之间）内拖动行即可重排。
-- **提升子菜单条目** —— 把子菜单里的条目拖出来，克隆到一级菜单、紧跟在父条目之后；
-  拖回去即可还原。
-- **复制绝对路径**（默认关闭）—— 在文件列表中选中文件，按 `Ctrl`/`Cmd`+`C`
-  即可把它们的绝对路径复制到剪贴板。
-- 跟随应用语言，支持 English、简体中文、繁體中文。
+- **Automatic discovery** — right-click anywhere and the menu you opened is
+  registered as its own tab in settings, entries and icons included. Nothing is
+  hardcoded, so menu entries added by other plugins show up too.
+- **Hide entries and separators** — click the eye next to a row. Groups that end
+  up empty are hidden along with their divider.
+- **Reorder** — drag rows within a separator-bounded segment.
+- **Promote submenu entries** — drag an entry out of a submenu to clone it into
+  the top-level menu, placed right after its parent; drag it back to undo.
+- **Copy absolute paths** (opt-in) — select files in the file explorer and press
+  `Ctrl`/`Cmd`+`C` to copy their absolute paths to the clipboard.
+- English, 简体中文 and 繁體中文, following the app language.
 
-## 使用
+## Usage
 
-1. 右键点击你想裁剪的对象（文件、文件夹、标签页、编辑器……），这一步会注册该菜单。
-2. 打开**设置 → Menu Hider**，选中对应的菜单标签页，点击条目旁的眼睛图标把它藏起来。
-3. 拖动左侧的拖拽手柄排序，或把条目拖出子菜单以提升它。
+1. Right-click the element whose menu you want to trim (a file, a folder, a tab,
+   the editor…). This registers the menu.
+2. Open **Settings → Menu Hider**, pick the menu's tab, and click the eye icon
+   next to the entries you want gone.
+3. Drag the grip handle to reorder, or drag an entry out of a submenu to promote
+   it.
 
-刷新按钮可以不离开设置页就重新收集菜单；对于无法模拟触发的菜单（多选文件、URL 菜单），
-请直接右键真实元素。
+The refresh button re-collects a menu without leaving settings; for menus that
+can't be synthesized (multi-file selection, URL menus) right-click the real
+element instead.
 
-## 实现方式，以及它的代价
+## How it works, and what that costs
 
-Obsidian 没有提供读取或过滤右键菜单条目的 API，因此本插件包装了
-`Menu.prototype.showAtPosition` —— 所有 `Menu.show*` 路径最终都会走到这个方法。
-包装它，插件才能在菜单被测量和绘制之前读到条目，隐藏才不会闪烁、键盘导航才是对的。
+Obsidian exposes no API for reading or filtering the entries of a context menu,
+so the plugin wraps `Menu.prototype.showAtPosition` — the single method every
+`Menu.show*` path ends in. Wrapping it lets the plugin read the entries just
+before the menu is measured and painted, which is what makes hiding flicker-free
+and keyboard navigation correct.
 
-需要知道的后果：
+Consequences worth knowing:
 
-- 包装在插件加载时安装、卸载时还原，不会留下永久修改。
-- 每次调用都包在 `try`/`catch` 里，插件内部出错只会打日志，原方法照常执行。
-- `showAtPosition` 不属于公开 API。如果 Obsidian 改动它，菜单仍能正常打开，
-  只是插件不再裁剪它们。
+- The wrapper is installed on load and removed on unload; nothing is patched
+  permanently.
+- Every call is wrapped in `try`/`catch`, so a failure inside the plugin logs to
+  the console and lets the original method run untouched.
+- `showAtPosition` is not part of the public API. If Obsidian changes it, menus
+  keep working and the plugin simply stops trimming them.
 
-条目按可见标题匹配，所以某个条目改了文案（换语言、插件升级）后需要重新隐藏一次。
+Entries are matched by their visible title, so a menu entry that changes its
+label (localization, a plugin update) needs to be hidden again.
 
-## 安装
+## Installation
 
-**手动安装** —— 从 [最新 release](https://github.com/Icy-Cat/obsidian-menu-hider/releases/latest)
-下载 `main.js`、`manifest.json`、`styles.css` 放进
-`<库>/.obsidian/plugins/menu-hider/`，然后在**设置 → 第三方插件**中启用。
+**Manual** — download `main.js`, `manifest.json` and `styles.css` from the
+[latest release](https://github.com/Icy-Cat/obsidian-menu-hider/releases/latest)
+into `<vault>/.obsidian/plugins/menu-hider/`, then enable the plugin in
+**Settings → Community plugins**.
 
-## 开发
+## Development
 
 ```bash
 npm install
-npm run dev     # 监听构建
-npm run build   # 类型检查 + 生产构建
+npm run dev     # watch build
+npm run build   # type-check + production bundle
 npm run lint
 ```
 
-仅支持桌面端：绝对路径需要本地文件系统库。
+Desktop only: absolute paths require a filesystem vault.
 
-## 许可证
+## License
 
 [MIT](LICENSE)

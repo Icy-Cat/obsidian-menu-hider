@@ -1,30 +1,7 @@
 import { FileSystemAdapter, Menu, Plugin, TFolder, TAbstractFile, MarkdownView, WorkspaceLeaf } from 'obsidian';
-import { MenuHiderSettings, MenuHiderSettingTab, MenuRecord, PromotedRef } from './settings';
+import { MenuHiderSettingTab } from './settings';
+import { CollectedEntry, CollectedMenuItem, MenuHiderSettings, MenuRecord, PersistedData, PromotedRef } from './types';
 import { initLocale, t } from './i18n';
-
-export interface CollectedMenuItem {
-	type: 'item';
-	title: string;
-	icon?: string;
-	children?: CollectedEntry[];
-	/** Display-only: this top-level row was promoted out of the named submenu. */
-	promotedFrom?: string;
-}
-
-export interface CollectedSeparator {
-	type: 'separator';
-}
-
-export type CollectedEntry = CollectedMenuItem | CollectedSeparator;
-
-/** Shape of data.json: the current format plus the pre-signature legacy keys. */
-interface PersistedData {
-	menus?: Record<string, Partial<MenuRecord>>;
-	copyAbsolutePath?: boolean;
-	hiddenItems?: Record<string, string[]>;
-	hiddenSeparators?: Record<string, number[]>;
-	savedEntries?: Record<string, CollectedEntry[]>;
-}
 
 interface PendingSig {
 	sig: string;
@@ -520,7 +497,7 @@ export default class MenuHiderPlugin extends Plugin {
 
 	async loadSettings() {
 		const loaded: unknown = await this.loadData();
-		const data: PersistedData | null = (loaded && typeof loaded === 'object') ? loaded as PersistedData : null;
+		const data = (loaded && typeof loaded === 'object') ? loaded as PersistedData : null;
 		this.settings = { menus: {}, copyAbsolutePath: data?.copyAbsolutePath ?? false };
 
 		// New-format data

@@ -1,31 +1,8 @@
 import { App, Notice, PluginSettingTab, Setting, setIcon } from 'obsidian';
 import Sortable from 'sortablejs';
-import MenuHiderPlugin, { CollectedEntry } from './main';
+import MenuHiderPlugin from './main';
+import { CollectedEntry, MenuRecord } from './types';
 import { labelForSig, t } from './i18n';
-
-export interface MenuRecord {
-	signature: string;
-	label: string;
-	entries: CollectedEntry[];
-	hiddenItems: string[];
-	hiddenSeparators: number[];
-	/** User-defined order of item titles. Items not listed keep their original position. */
-	order?: string[];
-	/** Submenu items lifted into the top-level menu, placed after their parent. */
-	promoted?: PromotedRef[];
-	lastSeenAt: number;
-}
-
-export interface PromotedRef {
-	parent: string;
-	title: string;
-}
-
-export interface MenuHiderSettings {
-	menus: Record<string, MenuRecord>;
-	/** Ctrl/Cmd+C in the file explorer copies absolute paths instead of doing nothing. */
-	copyAbsolutePath: boolean;
-}
 
 /** DOM/Sortable callbacks must return void, not a promise. */
 function voidHandler<A extends unknown[]>(fn: (...args: A) => Promise<void>): (...args: A) => void {

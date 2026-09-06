@@ -1,6 +1,6 @@
 # Menu Hider
 
-[English](README.en.md) | [简体中文](README.md) | **繁體中文**
+[English](README.md) | [简体中文](README.zh-CN.md) | **繁體中文**
 
 把 Obsidian 的右鍵選單裁剪成你真正要用的樣子：隱藏項目和分隔線、調整順序、
 把子選單裡的項目提升到一級選單。
